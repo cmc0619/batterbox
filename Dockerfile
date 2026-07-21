@@ -6,8 +6,9 @@ FROM python:3.12-slim
 # ffmpeg   — clip slicing, fades, loudnorm in the clip pipeline
 # mpv      — server-side audio playback (AUDIO_BACKEND=server, used on the Pi)
 # curl     — used by HEALTHCHECK and handy for debugging inside the container
+# bluez    — bluetoothctl, drives the Pi's Bluetooth adapter for speaker pairing
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg mpv curl \
+    && apt-get install -y --no-install-recommends ffmpeg mpv curl bluez \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv

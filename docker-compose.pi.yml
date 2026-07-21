@@ -12,6 +12,11 @@ services:
       - /dev/gpiomem:/dev/gpiomem
       # ALSA sound card for server-side playback via mpv.
       - /dev/snd:/dev/snd
+    volumes:
+      # Host BlueZ D-Bus socket so bluetoothctl in the container can drive the
+      # Pi's Bluetooth adapter (kiosk speaker pairing). Requires the host's
+      # bluetooth service running — Raspberry Pi OS provides it by default.
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
     environment:
       MOCK_GPIO: "false"
       # AUDIO_BACKEND — how the crowd hears the song:

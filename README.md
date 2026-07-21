@@ -116,6 +116,20 @@ Default is `AUDIO_BACKEND=browser`: the kiosk Chromium on the Pi plays the sound
 
 If you want the Pi headless (no browser, phones only), set `AUDIO_BACKEND=server` in `docker-compose.pi.yml` — mpv inside the container plays directly to ALSA via the mapped `/dev/snd`. You may need `AUDIO_OUTPUT` (e.g. `plughw:1,0` for a USB dongle) if auto picks the wrong device.
 
+### Bluetooth speaker
+
+The kiosk Chromium plays audio to the Pi's OS default output — so a Bluetooth speaker just needs to be paired to the Pi itself.
+
+**Primary flow (speaker/phone initiates):** tap the **BT** button on the kiosk top bar. It starts flashing blue — the Pi is discoverable for 120 seconds (tap again to stop early). During that window, select the Pi (its hostname, e.g. `raspberrypi`) from the speaker's or phone's Bluetooth menu. When a device is connected the dot turns solid blue and the button tooltip shows its name. Pairing auto-accepts — no PIN.
+
+**Some speakers can't browse for devices** (they expect to be discovered). For those, pair once from the Pi OS desktop (or `bluetoothctl scan on` → `pair <MAC>` on the host), then reconnect later with `POST /api/bluetooth/connect` and the speaker's MAC.
+
+On PC dev there's no BlueZ in the container by design — the BT button shows "Bluetooth unavailable" instead of breaking anything.
+
+An optional physical LED mirrors the flashing state: wire an LED (with ~330Ω resistor) to GPIO 26 (BCM) — it blinks ~2Hz while pairing is active. Disable by setting `gpio_bt_led_pin` to `0`.
+
+`docker-compose.pi.yml` already mounts the host's BlueZ D-Bus socket; the Pi's stock bluetooth service does the rest.
+
 ## Configuration
 
 All env vars, settable in `docker-compose.yml` / `.env` / shell:
@@ -141,6 +155,7 @@ Physical buttons call the same playback API as the touchscreen — one code path
 | Next batter | GPIO 27  | 13           |
 | Volume up   | GPIO 22  | 15           |
 | Volume down | GPIO 23  | 16           |
+| BT pairing LED (optional, via ~330Ω resistor) | GPIO 26 | 37 |
 
 `/dev/gpiomem` is mapped into the container by `docker-compose.pi.yml` — no privileged container needed. Keep wires away from the audio cable; GPIO noise on a cheap speaker wire sounds like a swarm of bees.
 

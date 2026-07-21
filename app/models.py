@@ -71,6 +71,14 @@ class VolumeSet(BaseModel):
     volume: int = Field(ge=0, le=100)
 
 
+class BluetoothPairingStart(BaseModel):
+    duration_sec: int = Field(default=120, ge=5, le=3600)
+
+
+class BluetoothConnectRequest(BaseModel):
+    mac: str = Field(pattern=r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+
 class SettingsPatch(BaseModel):
     default_snippet_length: int | None = None
     master_volume: int | None = Field(default=None, ge=0, le=100)

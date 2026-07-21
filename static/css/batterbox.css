@@ -182,6 +182,44 @@ a { color: var(--accent-2); }
   font-weight: 900;
 }
 
+#btn-bt {
+  flex: 0 0 auto;
+  min-width: 96px;
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 14px;
+}
+#btn-bt .bt-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #6b7280; /* gray = nothing connected */
+  flex: 0 0 auto;
+}
+#btn-bt.connected .bt-dot {
+  background: var(--accent-2); /* solid blue = a device is connected */
+  box-shadow: 0 0 10px var(--accent-2);
+}
+@keyframes bt-flash {
+  0%, 49% {
+    background: #1d4ed8;
+    border-color: var(--accent-2);
+    box-shadow: 0 0 18px var(--accent-2);
+  }
+  50%, 100% {
+    background: var(--panel-2);
+    border-color: var(--line);
+    box-shadow: none;
+  }
+}
+#btn-bt.pairing { animation: bt-flash 0.5s linear infinite; } /* ~2Hz, sunlight-obvious */
+#btn-bt.pairing .bt-dot { background: var(--accent-2); }
+
 #grid-wrap {
   position: relative;
   flex: 1 1 auto;
