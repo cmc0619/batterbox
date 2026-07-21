@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>BatterBox</title>
+<link rel="icon" href="img/walter.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/batterbox.css">
+</head>
+<body class="kiosk">
+<div id="kiosk">
+  <div id="topbar">
+    <select id="team-select" aria-label="Active team"></select>
+    <button type="button" class="vol-btn" id="vol-down" aria-label="Volume down">−</button>
+    <span class="vol-label" id="vol-label">–</span>
+    <button type="button" class="vol-btn" id="vol-up" aria-label="Volume up">+</button>
+    <button type="button" id="btn-stop">&#9632; STOP</button>
+    <a class="nav-btn" href="admin.html">ADMIN</a>
+  </div>
+  <div class="banner" id="warn-banner" role="alert"></div>
+  <div id="grid-wrap">
+    <div id="grid" aria-label="Players"></div>
+    <button type="button" class="page-arrow" id="page-prev" hidden aria-label="Previous page">&#8249;</button>
+    <button type="button" class="page-arrow" id="page-next" hidden aria-label="Next page">&#8250;</button>
+    <div id="page-indicator" hidden></div>
+    <div id="walter"><img src="img/walter.svg" alt="Walter Walkup"></div>
+  </div>
+  <div id="phone-list" aria-label="Players"></div>
+  <div id="mock-gpio"></div>
+</div>
+<script type="module" src="js/grid.js"></script>
+</body>
+</html>

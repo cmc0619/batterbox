@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>BatterBox Admin</title>
+<link rel="icon" href="img/walter.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/batterbox.css">
+</head>
+<body class="admin">
+<header class="admin-header">
+  <h1>BatterBox Admin</h1>
+  <nav>
+    <a class="nav-btn" href="index.html">&#9664; KIOSK</a>
+  </nav>
+</header>
+<div style="padding:10px 14px 0; max-width:1024px; margin:0 auto;">
+  <div class="banner" id="warn-banner" role="alert"></div>
+  <div id="mock-gpio" style="margin-top:8px;"></div>
+</div>
+<main class="admin-main">
+
+  <section class="section" id="teams-section">
+    <h2>Teams</h2>
+    <div class="team-chips" id="team-chips"></div>
+    <div class="form-row">
+      <input id="new-team-name" placeholder="New team name" autocomplete="off">
+      <button type="button" class="btn-primary" id="btn-add-team">Add Team</button>
+    </div>
+    <div class="form-row">
+      <button type="button" class="btn-ok" id="btn-set-active">Set Selected Team Active</button>
+      <button type="button" id="btn-rename-team">Rename Selected</button>
+      <button type="button" class="btn-danger" id="btn-delete-team">Delete Selected</button>
+    </div>
+  </section>
+
+  <section class="section" id="players-section">
+    <h2>Players — <span id="players-team-name">…</span></h2>
+    <p style="color:var(--dim); font-size:18px; margin:0 0 10px;">
+      Drag <b>&#8801;</b> to reorder the batting order. Tap a player to edit details and clips.
+    </p>
+    <div id="player-list"></div>
+    <div class="form-row">
+      <input id="new-player-name" placeholder="Player name" autocomplete="off">
+      <input id="new-player-jersey" placeholder="Jersey #" inputmode="numeric" style="max-width:140px;">
+      <button type="button" class="btn-primary" id="btn-add-player">Add Player</button>
+    </div>
+  </section>
+
+</main>
+<script type="module" src="js/admin.js"></script>
+</body>
+</html>
