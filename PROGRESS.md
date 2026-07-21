@@ -11,6 +11,9 @@
 - [ ] Human eyeball pass: open http://localhost:8080 at 1024×600 and on a phone; check tile layout, long-press feel, drag reorder
 - [ ] Real GPIO test on the Pi (docker-compose.pi.yml)
 
+## Done (continued)
+- [x] Clip re-edit: saved clips reopen in the editor (admin "Edit" button → edit.html?clip_id=N) with original source audio + saved trim region; PATCH /api/clips/{id} re-renders from the stored source. source_file column + non-destructive migration; pre-existing clips backfilled by timestamp/duration matching.
+
 ## Acceptance criteria checklist
 - [x] 1. `docker compose up` on PC → grid loads, tiles seeded from seed.json (2 teams, 16+8 players → paging active)
 - [x] 2. Tile tap plays; instant switch; STOP ≤200ms (browser playback via WS; state machine curl-verified — human ear check pending)

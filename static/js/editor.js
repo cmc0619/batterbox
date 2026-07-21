@@ -1,5 +1,8 @@
-/* BatterBox clip editor (edit.html?player_id=X&type=walkup|homerun).
- * Import (YouTube/upload) -> poll job -> wavesurfer trim w/ vendored peaks -> save clip.
+/* BatterBox clip editor.
+ * Import mode (edit.html?player_id=X&type=walkup|homerun):
+ *   import (YouTube/upload) -> poll job -> wavesurfer trim w/ vendored peaks -> save clip.
+ * Re-edit mode (edit.html?clip_id=N):
+ *   fetch edit_context -> wavesurfer from stored source -> PATCH new trim.
  * Contract: docs/API.md. wavesurfer is vendored in static/vendor — never CDN.
  */
 import { BB } from './ws.js';
@@ -8,7 +11,9 @@ import RegionsPlugin from '../vendor/wavesurfer/regions.esm.js';
 
 const params = new URLSearchParams(location.search);
 const playerId = Number(params.get('player_id'));
-const clipType = params.get('type') === 'homerun' ? 'homerun' : 'walkup';
+const clipId = Number(params.get('clip_id'));
+const reeditMode = clipId > 0; // ?clip_id=N re-opens a saved clip's trim
+let clipType = params.get('type') === 'homerun' ? 'homerun' : 'walkup';
 
 const banner = document.getElementById('warn-banner');
 const jobStatus = document.getElementById('job-status');
@@ -36,12 +41,12 @@ function setJobStatus(msg, isError = false) {
   jobStatus.classList.toggle('error', isError);
 }
 
-async function resolvePlayerName() {
+async function resolvePlayerName(pid) {
   try {
     const teams = await BB.api('/api/teams');
     for (const t of teams) {
       const players = await BB.api(`/api/teams/${t.id}/players`);
-      const p = players.find((x) => x.id === playerId);
+      const p = players.find((x) => x.id === pid);
       if (p) return p.name;
     }
   } catch { /* name is cosmetic */ }
@@ -158,11 +163,8 @@ previewBtn.addEventListener('click', () => {
 });
 
 saveBtn.addEventListener('click', async () => {
-  if (!region || jobId == null) return;
+  if (!region || (!reeditMode && jobId == null)) return;
   const body = {
-    job_id: jobId,
-    player_id: playerId,
-    type: clipType,
     trim_start_sec: region.start,
     trim_end_sec: region.end,
     fade_in_ms: Number(document.getElementById('fade-in').value) || 0,
@@ -175,7 +177,14 @@ saveBtn.addEventListener('click', async () => {
   }
   saveBtn.disabled = true;
   try {
-    await BB.api('/api/clips', { method: 'POST', body });
+    if (reeditMode) {
+      await BB.api(`/api/clips/${clipId}`, { method: 'PATCH', body });
+    } else {
+      await BB.api('/api/clips', {
+        method: 'POST',
+        body: { job_id: jobId, player_id: playerId, type: clipType, ...body },
+      });
+    }
     location.href = 'admin.html';
   } catch (err) {
     saveBtn.disabled = false;
@@ -183,15 +192,48 @@ saveBtn.addEventListener('click', async () => {
   }
 });
 
+/* ---------------- re-edit mode (?clip_id=N) ---------------- */
+
+async function bootReedit() {
+  document.getElementById('import-section').style.display = 'none';
+  let ctx;
+  try {
+    ctx = await BB.api(`/api/clips/${clipId}/edit_context`);
+  } catch (err) {
+    showBanner(`Cannot re-edit this clip: ${err.message}`);
+    return;
+  }
+  const clip = ctx.clip;
+  clipType = clip.type;
+  const name = await resolvePlayerName(clip.player_id);
+  document.getElementById('editor-title').textContent =
+    `Clip Editor — ${name || `Player #${clip.player_id}`} · ${clipType.toUpperCase()} · Edit trim`;
+  document.getElementById('fade-in').value = clip.fade_in_ms;
+  document.getElementById('fade-out').value = clip.fade_out_ms;
+  document.getElementById('boost').value = clip.volume_boost_db;
+  saveBtn.textContent = 'SAVE TRIM';
+  initEditor({
+    source_audio_url: ctx.source_audio_url,
+    peaks: ctx.peaks,
+    duration_sec: ctx.duration_sec,
+    suggested_start: clip.trim_start_sec,
+    suggested_end: clip.trim_end_sec,
+  });
+}
+
 /* ---------------- boot ---------------- */
 
 (async () => {
+  if (reeditMode) {
+    await bootReedit();
+    return;
+  }
   if (!playerId) {
     showBanner('Missing player_id — open this page from Admin → Add Clip.');
     document.getElementById('import-section').style.display = 'none';
     return;
   }
-  const name = await resolvePlayerName();
+  const name = await resolvePlayerName(playerId);
   document.getElementById('editor-title').textContent =
     `Clip Editor — ${name || `Player #${playerId}`} · ${clipType.toUpperCase()}`;
 })();

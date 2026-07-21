@@ -418,6 +418,15 @@ function buildClipRow(p, c) {
   });
   row.appendChild(playB);
 
+  const editB = document.createElement('button');
+  editB.type = 'button';
+  editB.textContent = 'Edit';
+  editB.title = 'Re-open trim editor';
+  editB.addEventListener('click', () => {
+    location.href = `edit.html?clip_id=${c.id}`;
+  });
+  row.appendChild(editB);
+
   if (!c.is_active) {
     const actB = document.createElement('button');
     actB.type = 'button';

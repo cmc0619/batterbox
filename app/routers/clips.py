@@ -6,7 +6,7 @@ import os
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
 from .. import db
-from ..models import ClipCreate, YoutubeImport
+from ..models import ClipCreate, ClipPatch, YoutubeImport
 from ..services import clipper
 
 router = APIRouter(tags=["clips"])
@@ -68,6 +68,39 @@ def create_clip(body: ClipCreate):
             fade_out_ms=body.fade_out_ms,
             volume_boost_db=body.volume_boost_db,
         )
+    except clipper.JobError as e:
+        raise HTTPException(400, str(e)) from e
+    except clipper.RenderError as e:
+        raise HTTPException(500, str(e)) from e
+
+
+@router.get("/api/clips/{clip_id}/edit_context")
+def edit_context(clip_id: int):
+    if db.get_clip(clip_id) is None:
+        raise HTTPException(404, f"clip {clip_id} not found")
+    try:
+        return clipper.edit_context(clip_id)
+    except clipper.SourceMissingError as e:
+        raise HTTPException(409, str(e)) from e
+    except clipper.RenderError as e:
+        raise HTTPException(500, str(e)) from e
+
+
+@router.patch("/api/clips/{clip_id}")
+def patch_clip(clip_id: int, body: ClipPatch):
+    if db.get_clip(clip_id) is None:
+        raise HTTPException(404, f"clip {clip_id} not found")
+    try:
+        return clipper.rerender_clip(
+            clip_id=clip_id,
+            trim_start_sec=body.trim_start_sec,
+            trim_end_sec=body.trim_end_sec,
+            fade_in_ms=body.fade_in_ms,
+            fade_out_ms=body.fade_out_ms,
+            volume_boost_db=body.volume_boost_db,
+        )
+    except clipper.SourceMissingError as e:
+        raise HTTPException(409, str(e)) from e
     except clipper.JobError as e:
         raise HTTPException(400, str(e)) from e
     except clipper.RenderError as e:

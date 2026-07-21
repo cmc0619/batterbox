@@ -50,6 +50,14 @@ class ClipCreate(BaseModel):
     volume_boost_db: float = 0.0
 
 
+class ClipPatch(BaseModel):
+    trim_start_sec: float
+    trim_end_sec: float
+    fade_in_ms: int
+    fade_out_ms: int
+    volume_boost_db: float
+
+
 class PlayRequest(BaseModel):
     player_id: int
     type: ClipType
