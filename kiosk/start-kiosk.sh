@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
-# BatterBox kiosk launcher — runs on the Raspberry Pi OS desktop (host, not Docker).
+# BatterBox kiosk launcher — runs on the Raspberry Pi (host, not Docker).
 #
 # Waits for the BatterBox container to answer on localhost:8080, then opens
 # Chromium full-screen (kiosk) tuned for the 1024x600 official touchscreen.
+# No desktop environment (KDE/Gnome) is required — pick one display path:
 #
-# Autostart on boot (Raspberry Pi OS with a desktop session):
-#   mkdir -p ~/.config/autostart
-#   cp kiosk/batterbox-kiosk.desktop ~/.config/autostart/batterbox-kiosk.desktop
-# (The .desktop file sits next to this script; edit the Exec= path inside it
-#  if you cloned the repo somewhere other than /home/pi/batterbox.)
+# A) Raspberry Pi OS Lite + cage (recommended, no desktop at all):
+#      sudo apt install -y cage chromium
+#      sudo raspi-config  # System Options → Boot / Auto Login → Console Autologin
+#      ~/.bash_profile:
+#        if [ -z "$WAYLAND_DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
+#          exec cage -- /home/pi/batterbox/kiosk/start-kiosk.sh
+#        fi
+#    (cage IS the entire window system — a tiny Wayland kiosk compositor that
+#     runs this one script full-screen; Chromium speaks Wayland to it natively.)
+#
+# B) Raspberry Pi OS with desktop (autostart into the stock session):
+#      mkdir -p ~/.config/autostart
+#      cp kiosk/batterbox-kiosk.desktop ~/.config/autostart/batterbox-kiosk.desktop
+#    (The .desktop file sits next to this script; edit the Exec= path inside it
+#     if you cloned the repo somewhere other than /home/pi/batterbox.)
 
 set -u
 

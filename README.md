@@ -12,6 +12,16 @@ BatterBox is a walk-up song player for youth baseball, hosted on a Raspberry Pi 
 - **Physical buttons** — wire real buttons to the Pi's GPIO pins for STOP / next batter / volume, or use the on-screen/keyboard mock buttons.
 - **Works offline at the field** — phones on the dugout Wi-Fi hotspot can queue songs; no internet needed once clips are imported.
 
+## Screenshots
+
+| Kiosk grid (1024×600 touchscreen) | Admin (teams, roster, drag-to-reorder) |
+| --- | --- |
+| ![Kiosk grid](docs/screenshots/kiosk-grid.png) | ![Admin](docs/screenshots/admin.png) |
+
+| Clip editor (waveform trim) | Phone layout |
+| --- | --- |
+| ![Clip editor](docs/screenshots/clip-editor.png) | ![Phone](docs/screenshots/phone.png) |
+
 ## Run it on your PC (dev / demo)
 
 Requires Docker Desktop. That's all.
@@ -66,7 +76,23 @@ Target: Raspberry Pi OS 64-bit (Bookworm or later), Pi 4 or 5 recommended.
 
    The first build takes a while on a Pi — go warm up the infield. The app comes up on port 8080 and restarts on reboot automatically (`unless-stopped`).
 
-3. **Kiosk autostart** (full-screen touchscreen UI on the Pi's display):
+3. **Kiosk display** (full-screen touchscreen UI on the Pi's display):
+
+   **No KDE, Gnome, or any desktop environment is needed — and none is used.** The "window system" is one of two tiny options; both just put Chromium's kiosk window on the HDMI touchscreen. There is no Qt app and nothing to write in Qt — Chromium *is* the UI runtime, pointed at `http://localhost:8080`.
+
+   **Option A — Raspberry Pi OS Lite + cage (recommended, lightest).** [cage](https://github.com/cage-kiosk/cage) is a Wayland kiosk compositor: it is the entire "window manager", runs exactly one app full-screen, and is made for appliances like this. Touch works out of the box via libinput.
+
+   ```bash
+   sudo apt update && sudo apt install -y cage chromium
+   # autologin to a console on boot:
+   sudo raspi-config   # System Options → Boot / Auto Login → Console Autologin
+   # launch the kiosk when the console session starts:
+   echo 'if [ -z "$WAYLAND_DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then exec cage -- /home/pi/batterbox/kiosk/start-kiosk.sh; fi' >> ~/.bash_profile
+   ```
+
+   On boot: Pi logs itself in on tty1 → cage starts → `start-kiosk.sh` waits for the container and execs Chromium full-screen. Boot-to-music on a Pi 5 is well under a minute.
+
+   **Option B — Raspberry Pi OS with desktop** (what you'd use anyway for other things): keep the stock Wayland/X session and autostart the kiosk into it:
 
    ```bash
    mkdir -p ~/.config/autostart
@@ -74,7 +100,7 @@ Target: Raspberry Pi OS 64-bit (Bookworm or later), Pi 4 or 5 recommended.
    # edit ~/.config/autostart/batterbox-kiosk.desktop if the repo isn't at /home/pi/batterbox
    ```
 
-   On the next login the kiosk script waits for the app to answer on port 8080, then opens Chromium full-screen. Audio plays through the browser out the 3.5mm jack or HDMI — plug your speaker/PA into the Pi.
+   Either way the kiosk script waits for the app to answer on port 8080, then opens Chromium full-screen. Audio plays through the browser out the 3.5mm jack / HDMI / USB DAC — plug your speaker/PA into the Pi.
 
 4. **Wi-Fi hotspot** (phones in the dugout): configure the Pi as a hotspot — NetworkManager makes this one command:
 
