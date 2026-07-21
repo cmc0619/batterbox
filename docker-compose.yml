@@ -1,0 +1,24 @@
+# BatterBox — base stack (PC dev / demo).
+# `docker compose up --build` → fully working app at http://localhost:8080
+# with mock GPIO and browser audio playback. No other steps needed.
+#
+# On a Raspberry Pi, layer the Pi overrides on top:
+#   docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+
+services:
+  app:
+    build: .
+    container_name: batterbox
+    ports:
+      - "8080:8080"
+    volumes:
+      # SQLite DB + clips/photos/sources. Survives rebuilds; never committed.
+      - ./data:/data
+    environment:
+      # Passthrough from the host shell, with sensible defaults.
+      MOCK_GPIO: ${MOCK_GPIO:-true}
+      AUDIO_BACKEND: ${AUDIO_BACKEND:-browser}
+      AUDIO_OUTPUT: ${AUDIO_OUTPUT:-auto}
+      PORT: ${PORT:-8080}
+      DATA_DIR: /data
+    restart: unless-stopped

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=BatterBox Kiosk
+Comment=Launch BatterBox walk-up song player in full-screen Chromium
+# Edit this path if the repo is not cloned at /home/pi/batterbox.
+Exec=/home/pi/batterbox/kiosk/start-kiosk.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true
