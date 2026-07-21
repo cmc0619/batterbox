@@ -17,17 +17,12 @@
 </header>
 <div style="padding:10px 14px 0; max-width:1024px; margin:0 auto;">
   <div class="banner" id="warn-banner" role="alert"></div>
-  <div id="mock-gpio" style="margin-top:8px;"></div>
 </div>
 <main class="admin-main">
 
   <section class="section" id="teams-section">
-    <h2>Teams</h2>
+    <h2>Teams Config</h2>
     <div class="team-chips" id="team-chips"></div>
-    <div class="form-row">
-      <input id="new-team-name" placeholder="New team name" autocomplete="off">
-      <button type="button" class="btn-primary" id="btn-add-team">Add Team</button>
-    </div>
     <div class="form-row active-team-row">
       <label for="active-team-select">Kiosk team:</label>
       <select id="active-team-select" aria-label="Active team on kiosk"></select>
@@ -35,6 +30,10 @@
     <div class="form-row">
       <button type="button" id="btn-rename-team">Rename Selected</button>
       <button type="button" class="btn-danger" id="btn-delete-team">Delete Selected</button>
+    </div>
+    <div class="form-row">
+      <input id="new-team-name" placeholder="New team name" autocomplete="off">
+      <button type="button" class="btn-primary" id="btn-add-team">Add Team</button>
     </div>
   </section>
 
