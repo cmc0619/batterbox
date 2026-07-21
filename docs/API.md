@@ -78,6 +78,20 @@ Clip object:
 - `POST /api/playback/next` → state (next player in active team's batting order — wraps around — with an active walkup clip; plays it)
 - `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "volume", "audio_warning": null|"..." }`
 
+## Bluetooth speaker pairing
+
+Status object:
+```json
+{ "available": true, "pairing": false, "detail": "Bluetooth ready",
+  "devices": [{ "name": "SRS-XB13", "mac": "AA:BB:CC:DD:EE:FF", "connected": true }] }
+```
+`available=false` (PC dev, no BlueZ/D-Bus) → `devices` is empty and `detail` is human-readable; only "unavailable" ever produces an HTTP error (400).
+
+- `GET /api/bluetooth/status` → status object
+- `POST /api/bluetooth/pairing` `{ "duration_sec": 120 }` → status (makes the Pi discoverable/pairable with auto-accept agent for duration_sec; re-posting extends the window; 400 if unavailable)
+- `POST /api/bluetooth/pairing/stop` → status (ends pairing mode early)
+- `POST /api/bluetooth/connect` `{ "mac": "AA:BB:CC:DD:EE:FF" }` → status (connect attempt to a known device; 400 if unavailable, otherwise a failed attempt returns 200 with the error in `detail`)
+
 ## Settings
 
 - `GET /api/settings` → `{ "default_snippet_length": 12, "master_volume": 80, "audio_output": "auto", "mock_gpio": true }`

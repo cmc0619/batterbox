@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .routers import clips, playback, players, settings, teams
+from .routers import bluetooth, clips, playback, players, settings, teams
 from .services import audio, gpio
 
 logging.basicConfig(
@@ -53,6 +53,7 @@ app.include_router(teams.router)
 app.include_router(players.router)
 app.include_router(clips.router)
 app.include_router(playback.router)
+app.include_router(bluetooth.router)
 app.include_router(settings.router)
 
 

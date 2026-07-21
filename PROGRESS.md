@@ -13,6 +13,7 @@
 
 ## Done (continued)
 - [x] Clip re-edit: saved clips reopen in the editor (admin "Edit" button → edit.html?clip_id=N) with original source audio + saved trim region; PATCH /api/clips/{id} re-renders from the stored source. source_file column + non-destructive migration; pre-existing clips backfilled by timestamp/duration matching.
+- [x] Bluetooth speaker pairing from the kiosk: BT top-bar button (flashing blue while discoverable, solid blue dot when connected), `/api/bluetooth/*` endpoints driving BlueZ via bluetoothctl over the host D-Bus socket (docker-compose.pi.yml), 120s auto-expiring pairing mode, optional pairing LED on GPIO 26 (BCM). Gracefully unavailable on PC dev (verified: status 200 available=false, pairing/connect 400).
 
 ## Acceptance criteria checklist
 - [x] 1. `docker compose up` on PC → grid loads, tiles seeded from seed.json (2 teams, 16+8 players → paging active)

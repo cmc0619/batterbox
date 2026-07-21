@@ -11,7 +11,7 @@ Big league music for big league moments. Raspberry Pi–hosted walk-up song play
 
 ## Architecture
 
-- `app/` — FastAPI backend. `routers/` = REST per `docs/API.md`, `services/` = audio playback, clip pipeline (yt-dlp/ffmpeg), GPIO.
+- `app/` — FastAPI backend. `routers/` = REST per `docs/API.md`, `services/` = audio playback, clip pipeline (yt-dlp/ffmpeg), GPIO, Bluetooth pairing (`bluetooth.py` — drives host BlueZ via `bluetoothctl` over the D-Bus socket mounted by docker-compose.pi.yml; degrades to available=false off-Pi).
 - `static/` — no-build JS SPA: `index.html` (kiosk 1024×600 + phone responsive), `admin.html` (roster/teams/clips, touch drag-drop reorder), `edit.html` (wavesurfer trim editor). wavesurfer is **vendored** in `static/vendor/` — never CDN at runtime (field has no internet).
 - `data/` — SQLite DB + clips/photos/sources. Mounted volume; never commit contents.
 - `docs/API.md` — binding backend↔frontend contract. Change it in the same commit as any API change.

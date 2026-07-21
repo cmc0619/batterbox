@@ -6,11 +6,12 @@ gpiozero) so the app never crashes off-Pi.
 import logging
 
 from .. import config, db
-from . import audio
+from . import audio, bluetooth
 
 log = logging.getLogger("batterbox.gpio")
 
 _buttons: list = []  # keep references alive
+_bt_led = None  # gpiozero LED, kept alive for blink thread
 
 
 def _safe(fn):
@@ -32,6 +33,36 @@ def _next_batter() -> None:
     state, err = audio.play_next()
     if err:
         log.info("GPIO next: %s", err)
+
+
+def _init_bt_led() -> None:
+    """Pairing-indicator LED: blinks ~2Hz while Bluetooth pairing mode is
+    active, off otherwise. gpio_bt_led_pin=0 disables it."""
+    global _bt_led
+    pin = int(db.get_setting("gpio_bt_led_pin", "26"))
+    if pin == 0:
+        log.info("gpio_bt_led_pin=0 — Bluetooth pairing LED disabled")
+        return
+    try:
+        from gpiozero import LED
+
+        _bt_led = LED(pin)
+        _bt_led.off()
+    except Exception as e:  # noqa: BLE001
+        log.warning("BT pairing LED init failed (%s) — continuing without it", e)
+        return
+
+    def _on_pairing_change(active: bool) -> None:
+        try:
+            if active:
+                _bt_led.blink(on_time=0.25, off_time=0.25)
+            else:
+                _bt_led.off()
+        except Exception:  # noqa: BLE001 - a GPIO edge must never kill the app
+            log.exception("BT pairing LED update failed")
+
+    bluetooth.add_pairing_listener(_on_pairing_change)
+    log.info("Bluetooth pairing LED on GPIO %d (BCM)", pin)
 
 
 def init_gpio() -> None:
@@ -61,5 +92,6 @@ def init_gpio() -> None:
             btn.when_pressed = handlers[name]
             _buttons.append(btn)
         log.info("GPIO buttons initialized on pins %s", pins)
+        _init_bt_led()
     except Exception as e:  # noqa: BLE001
         log.warning("GPIO init failed (%s) — continuing without GPIO", e)

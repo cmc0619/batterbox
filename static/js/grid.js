@@ -199,6 +199,49 @@ pageNext.addEventListener('click', () => {
   render();
 });
 
+/* ---------------- Bluetooth speaker pairing ---------------- */
+
+const btBtn = document.getElementById('btn-bt');
+let btStatus = { available: false, pairing: false, detail: '', devices: [] };
+
+function renderBt() {
+  const connected = (btStatus.devices || []).find((d) => d.connected);
+  btBtn.classList.toggle('pairing', !!btStatus.pairing);
+  btBtn.classList.toggle('connected', !btStatus.pairing && !!connected);
+  const hint = btStatus.pairing
+    ? 'Pairing… tap to stop'
+    : connected
+      ? `Connected: ${connected.name}`
+      : (btStatus.detail || 'Bluetooth');
+  btBtn.title = hint;
+  btBtn.setAttribute('aria-label', `Bluetooth — ${hint}`);
+}
+
+async function refreshBt() {
+  try {
+    btStatus = await BB.api('/api/bluetooth/status');
+  } catch { /* backend older than this feature — leave last state */ }
+  renderBt();
+}
+
+btBtn.addEventListener('click', async () => {
+  try {
+    await refreshBt();
+    if (!btStatus.available) {
+      showBanner(`Bluetooth unavailable: ${btStatus.detail}`, false);
+      return;
+    }
+    btStatus = btStatus.pairing
+      ? await BB.api('/api/bluetooth/pairing/stop', { method: 'POST' })
+      : await BB.api('/api/bluetooth/pairing', { method: 'POST', body: { duration_sec: 120 } });
+    renderBt();
+  } catch (err) {
+    showBanner(err.message, false);
+    refreshBt();
+  }
+});
+setInterval(refreshBt, 5000);
+
 /* ---------------- WebSocket wiring ---------------- */
 
 BB.on('play', (msg) => { markPlaying(msg.player_id); hideBanner(); });
@@ -217,6 +260,7 @@ BB.on('warning', (msg) => showBanner(msg.message));
   BB.connect();
   BB.initMockGPIO(document.getElementById('mock-gpio'));
   volLabel.textContent = BB.getVolume();
+  refreshBt();
   try {
     await loadTeams();
   } catch (err) {
