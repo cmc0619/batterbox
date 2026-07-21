@@ -28,6 +28,7 @@ function hideBanner() { banner.classList.remove('show'); }
 
 function jerseyOf(input) {
   const v = String(input).trim();
+  if (v === '') return null; // backend takes int|null; '' would 422 the whole save
   const n = parseInt(v, 10);
   return Number.isNaN(n) ? v : n;
 }
@@ -218,7 +219,10 @@ function buildPlayerRow(p) {
 function attachDrag(row, handle) {
   handle.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    handle.setPointerCapture(e.pointerId);
+    // NOTE: no setPointerCapture — Chrome releases capture when the row is
+    // reparented by insertBefore mid-drag, which silently killed the drag.
+    // Window-level listeners survive DOM moves; touch-action:none on the
+    // handle prevents scroll takeover.
     const startY = e.clientY;
     const grabTop = row.offsetTop;
     let dragging = false;
@@ -259,9 +263,9 @@ function attachDrag(row, handle) {
     };
 
     const finish = async () => {
-      handle.removeEventListener('pointermove', onMove);
-      handle.removeEventListener('pointerup', finish);
-      handle.removeEventListener('pointercancel', finish);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
       row.classList.remove('dragging');
       row.style.transform = '';
       clearIndicators();
@@ -279,9 +283,9 @@ function attachDrag(row, handle) {
       }
     };
 
-    handle.addEventListener('pointermove', onMove);
-    handle.addEventListener('pointerup', finish);
-    handle.addEventListener('pointercancel', finish);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
   });
 }
 
