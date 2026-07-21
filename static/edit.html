@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>BatterBox — Clip Editor</title>
+<link rel="icon" href="img/walter.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/batterbox.css">
+</head>
+<body class="editor">
+<header class="admin-header">
+  <h1 id="editor-title">Clip Editor</h1>
+  <nav>
+    <a class="nav-btn" href="admin.html">&#9664; ADMIN</a>
+  </nav>
+</header>
+<main class="editor-main">
+  <div class="banner" id="warn-banner" role="alert"></div>
+
+  <section class="section" id="import-section">
+    <h2>1 — Import audio</h2>
+    <div class="form-row">
+      <input id="yt-url" type="url" placeholder="Paste YouTube URL" autocomplete="off">
+      <button type="button" class="btn-primary" id="btn-yt">Import from YouTube</button>
+    </div>
+    <div class="form-row">
+      <input id="file-input" type="file" accept="audio/mpeg,audio/mp4,audio/x-m4a,.mp3,.m4a">
+      <button type="button" class="btn-primary" id="btn-upload">Upload File</button>
+    </div>
+    <div id="job-status"></div>
+  </section>
+
+  <section class="section" id="trim-section" hidden>
+    <h2>2 — Trim &amp; save</h2>
+    <div id="wave"></div>
+    <div id="region-readout">Drag the yellow region edges to trim.</div>
+    <div class="editor-controls">
+      <div>
+        <label for="fade-in">Fade in (ms)</label>
+        <input id="fade-in" type="number" min="0" max="5000" step="50" value="300">
+      </div>
+      <div>
+        <label for="fade-out">Fade out (ms)</label>
+        <input id="fade-out" type="number" min="0" max="5000" step="50" value="500">
+      </div>
+      <div>
+        <label for="boost">Volume boost (dB)</label>
+        <input id="boost" type="number" min="-12" max="12" step="0.5" value="0">
+      </div>
+    </div>
+    <div class="editor-actions">
+      <button type="button" class="btn-ok" id="btn-preview">&#9654; Preview Region</button>
+      <button type="button" class="btn-primary" id="btn-save">SAVE CLIP</button>
+    </div>
+  </section>
+</main>
+<script type="module" src="js/editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Walter Walkup mascot">
+  <!-- bat -->
+  <g transform="rotate(38 88 40)">
+    <rect x="84" y="6" width="9" height="46" rx="4.5" fill="#b07a3f"/>
+    <rect x="85.5" y="46" width="6" height="16" rx="3" fill="#8a5a28"/>
+    <circle cx="88.5" cy="63" r="4.5" fill="#8a5a28"/>
+  </g>
+  <!-- arms -->
+  <path d="M30 84 Q18 70 30 60" stroke="#f5c98a" stroke-width="9" fill="none" stroke-linecap="round"/>
+  <path d="M90 84 Q104 74 92 58" stroke="#f5c98a" stroke-width="9" fill="none" stroke-linecap="round"/>
+  <!-- body / jersey -->
+  <path d="M34 108 Q60 84 86 108 Z" fill="#1d4ed8"/>
+  <path d="M34 108 Q60 84 86 108" stroke="#ffffff" stroke-width="3" fill="none"/>
+  <!-- baseball head -->
+  <circle cx="60" cy="52" r="34" fill="#fdfdfd" stroke="#d9d9d9" stroke-width="2"/>
+  <!-- stitching -->
+  <path d="M33 34 Q44 52 33 70" stroke="#d63031" stroke-width="3" fill="none" stroke-dasharray="5 4"/>
+  <path d="M87 34 Q76 52 87 70" stroke="#d63031" stroke-width="3" fill="none" stroke-dasharray="5 4"/>
+  <!-- cap -->
+  <path d="M27 42 Q30 14 60 14 Q90 14 93 42 Q76 32 60 32 Q44 32 27 42 Z" fill="#14213d"/>
+  <path d="M60 14 Q90 14 93 42 L96 40 Q104 38 104 44 Q104 50 92 48" fill="#14213d"/>
+  <text x="60" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="900" fill="#ffb703">W</text>
+  <!-- eyes -->
+  <circle cx="48" cy="52" r="4.5" fill="#14213d"/>
+  <circle cx="72" cy="52" r="4.5" fill="#14213d"/>
+  <circle cx="49.5" cy="50.5" r="1.5" fill="#ffffff"/>
+  <circle cx="73.5" cy="50.5" r="1.5" fill="#ffffff"/>
+  <!-- smile -->
+  <path d="M46 64 Q60 76 74 64" stroke="#14213d" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <!-- cheeks -->
+  <circle cx="40" cy="60" r="4" fill="#ffb3b3" opacity="0.7"/>
+  <circle cx="80" cy="60" r="4" fill="#ffb3b3" opacity="0.7"/>
+</svg>
