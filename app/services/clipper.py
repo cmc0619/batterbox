@@ -1,0 +1,274 @@
+"""Clip pipeline: async import jobs (yt-dlp / upload), waveform analysis,
+and the ffmpeg slice+fade+loudnorm render.
+
+Jobs run on a small in-process thread pool; status lives in a module-level
+dict (jobs are ephemeral — they don't need to survive a restart). All ffmpeg
+/ ffprobe / yt-dlp failures land in job status=error with a detail message;
+nothing here raises into the request path uncaught.
+"""
+
+import json
+import logging
+import os
+import subprocess
+import uuid
+from array import array
+from concurrent.futures import ThreadPoolExecutor
+
+from .. import config, db
+
+log = logging.getLogger("batterbox.clipper")
+
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="clipper")
+_jobs: dict[str, dict] = {}
+
+PEAK_BUCKETS = 800
+PCM_RATE = 8000  # mono s16le decode rate for analysis
+
+
+class JobError(Exception):
+    """Raised for client-facing job problems (unknown id, not done, ...)."""
+
+
+class RenderError(Exception):
+    """Raised when the ffmpeg render pass fails."""
+
+
+# -------------------------------------------------------------- job intake
+
+
+def get_job(job_id: str) -> dict | None:
+    return _jobs.get(job_id)
+
+
+def job_public(job: dict) -> dict:
+    return {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "detail": job.get("detail", ""),
+        "duration_sec": job.get("duration_sec"),
+        "suggested_start": job.get("suggested_start"),
+        "suggested_end": job.get("suggested_end"),
+        "source_audio_url": job.get("source_audio_url"),
+        "peaks": job.get("peaks"),
+    }
+
+
+def _new_job(player_id: int, clip_type: str, source: str, source_url: str | None) -> dict:
+    job = {
+        "job_id": uuid.uuid4().hex[:12],
+        "status": "pending",
+        "detail": "",
+        "player_id": player_id,
+        "type": clip_type,
+        "source": source,
+        "source_url": source_url,
+    }
+    _jobs[job["job_id"]] = job
+    return job
+
+
+def start_youtube_job(player_id: int, clip_type: str, url: str) -> dict:
+    job = _new_job(player_id, clip_type, "youtube", url)
+    _executor.submit(_run_youtube, job)
+    return job
+
+
+def start_upload_job(player_id: int, clip_type: str, ext: str, data: bytes) -> dict:
+    job = _new_job(player_id, clip_type, "upload", None)
+    path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ext)
+    with open(path, "wb") as f:
+        f.write(data)
+    _executor.submit(_analyze, job, path)
+    return job
+
+
+# ------------------------------------------------------------------ stages
+
+
+def _run_youtube(job: dict) -> None:
+    job["status"] = "processing"
+    try:
+        import yt_dlp
+    except ImportError:
+        job["status"] = "error"
+        job["detail"] = "yt-dlp is not installed"
+        return
+    out_tmpl = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ".%(ext)s")
+    opts = {
+        "format": "bestaudio/best",
+        "outtmpl": out_tmpl,
+        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
+        "quiet": True,
+        "no_warnings": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([job["source_url"]])
+    except Exception as e:  # noqa: BLE001 - yt-dlp raises many types
+        job["status"] = "error"
+        job["detail"] = f"yt-dlp failed: {e}"
+        return
+    path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ".mp3")
+    if not os.path.exists(path):
+        job["status"] = "error"
+        job["detail"] = "yt-dlp did not produce an mp3 (is ffmpeg installed?)"
+        return
+    _analyze(job, path)
+
+
+def _ffprobe_duration(path: str) -> float:
+    proc = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "json", path,
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    if proc.returncode != 0:
+        raise RenderError(f"ffprobe failed: {proc.stderr.strip()[:300]}")
+    return float(json.loads(proc.stdout)["format"]["duration"])
+
+
+def _decode_pcm(path: str) -> array:
+    proc = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", path,
+         "-f", "s16le", "-ac", "1", "-ar", str(PCM_RATE), "pipe:1"],
+        capture_output=True, timeout=600,
+    )
+    if proc.returncode != 0:
+        raise RenderError(f"ffmpeg decode failed: {proc.stderr.decode(errors='replace').strip()[:300]}")
+    samples = array("h")
+    samples.frombytes(proc.stdout)
+    return samples
+
+
+def _analyze(job: dict, path: str) -> None:
+    job["status"] = "processing"
+    snippet = float(db.get_setting("default_snippet_length", "12"))
+    try:
+        duration = _ffprobe_duration(path)
+        job["duration_sec"] = round(duration, 3)
+        samples = _decode_pcm(path)
+        job["peaks"] = _peaks(samples)
+        start = _loudest_window(samples, duration, snippet)
+        if start is None:
+            start = 0.0  # fallback: 0 -> default_snippet_length
+        job["suggested_start"] = round(start, 1)
+        job["suggested_end"] = round(min(start + snippet, duration), 1)
+        job["source_audio_url"] = "/media/sources/" + os.path.basename(path)
+        job["source_path"] = path
+        job["status"] = "done"
+    except FileNotFoundError as e:
+        job["status"] = "error"
+        job["detail"] = f"missing binary: {e.filename or e} (ffmpeg/ffprobe required)"
+    except Exception as e:  # noqa: BLE001
+        job["status"] = "error"
+        job["detail"] = str(e)
+        log.warning("analysis failed for job %s: %s", job["job_id"], e)
+
+
+def _peaks(samples: array) -> list[float]:
+    """~800 normalized (0..1) max-amplitude buckets for waveform rendering."""
+    n = len(samples)
+    if n == 0:
+        return []
+    bucket = max(1, -(-n // PEAK_BUCKETS))
+    peaks = []
+    for i in range(0, n, bucket):
+        chunk = samples[i : i + bucket]
+        if not chunk:
+            break
+        # max()/min() over array slices run at C speed
+        peak = max(max(chunk), -min(chunk)) / 32768.0
+        peaks.append(round(min(1.0, peak), 3))
+    return peaks
+
+
+def _loudest_window(samples: array, duration: float, snippet: float) -> float | None:
+    """Start (seconds) of the loudest `snippet`-long window, by 1s-window RMS."""
+    n = len(samples)
+    win = PCM_RATE  # 1 second of samples
+    n_windows = n // win
+    if n_windows < 2:
+        return None
+    rms = []
+    for w in range(n_windows):
+        chunk = samples[w * win : (w + 1) * win]
+        rms.append(sum(x * x for x in chunk) / len(chunk))
+    span = max(1, int(snippet))
+    if span >= n_windows:
+        return None
+    best_start, best_sum = 0, -1.0
+    cur = sum(rms[:span])
+    for i in range(0, n_windows - span + 1):
+        if i > 0:
+            cur += rms[i + span - 1] - rms[i - 1]
+        if cur > best_sum:
+            best_sum, best_start = cur, i
+    return float(best_start)
+
+
+# ------------------------------------------------------------------ render
+
+
+def create_clip(
+    job_id: str,
+    player_id: int,
+    clip_type: str,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+    volume_boost_db: float,
+) -> dict:
+    job = _jobs.get(job_id)
+    if job is None:
+        raise JobError("unknown job_id")
+    if job["status"] != "done":
+        raise JobError(f"job is not done (status={job['status']}: {job.get('detail', '')})")
+    if trim_end_sec <= trim_start_sec:
+        raise JobError("trim_end_sec must be greater than trim_start_sec")
+    src = job["source_path"]
+    duration = round(trim_end_sec - trim_start_sec, 3)
+    is_first = db.count_clips(player_id, clip_type) == 0
+    clip_id = db.insert_clip(
+        player_id=player_id,
+        clip_type=clip_type,
+        is_active=is_first,  # first clip of player+type becomes active
+        source=job["source"],
+        source_url=job["source_url"],
+        duration_sec=duration,
+        trim_start_sec=trim_start_sec,
+        trim_end_sec=trim_end_sec,
+        fade_in_ms=fade_in_ms,
+        fade_out_ms=fade_out_ms,
+        volume_boost_db=volume_boost_db,
+    )
+    dst = os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3")
+    filters = []
+    if fade_in_ms > 0:
+        filters.append(f"afade=t=in:st=0:d={fade_in_ms / 1000:.3f}")
+    if fade_out_ms > 0:
+        out_st = max(0.0, duration - fade_out_ms / 1000)
+        filters.append(f"afade=t=out:st={out_st:.3f}:d={fade_out_ms / 1000:.3f}")
+    filters.append("loudnorm")  # EBU R128
+    cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-ss", f"{trim_start_sec:.3f}", "-to", f"{trim_end_sec:.3f}",
+        "-i", src, "-vn",
+        "-af", ",".join(filters),
+        "-b:a", "192k", dst,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if proc.returncode != 0:
+            raise RenderError(f"ffmpeg render failed: {proc.stderr.strip()[:500]}")
+    except FileNotFoundError:
+        db.delete_clip(clip_id)
+        raise RenderError("ffmpeg is not installed") from None
+    except Exception:
+        db.delete_clip(clip_id)
+        raise
+    return db.get_clip(clip_id)
