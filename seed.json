@@ -1,0 +1,38 @@
+{
+  "teams": [
+    {
+      "name": "Sandlot Sluggers",
+      "players": [
+        { "name": "Bobby 'Rocket' Reyes", "jersey_number": 3 },
+        { "name": "Tommy Delgado", "jersey_number": 7 },
+        { "name": "Marcus 'Big Cat' Cole", "jersey_number": 22 },
+        { "name": "Jimmy Okafor", "jersey_number": 11 },
+        { "name": "Danny Fuentes", "jersey_number": 5 },
+        { "name": "Eddie Kowalski", "jersey_number": 44 },
+        { "name": "Sam Whitfield", "jersey_number": 9 },
+        { "name": "Ricky Tanaka", "jersey_number": 14 },
+        { "name": "Petey Alvarez", "jersey_number": 2 },
+        { "name": "Nate 'Wheels' Murphy", "jersey_number": 18 },
+        { "name": "Chris Boudreaux", "jersey_number": 27 },
+        { "name": "Alex Lindqvist", "jersey_number": 31 },
+        { "name": "Jordan Peña", "jersey_number": 8 },
+        { "name": "Casey Doyle", "jersey_number": 16 },
+        { "name": "Moose Harrington", "jersey_number": 99 },
+        { "name": "Walter Walkup", "jersey_number": 1 }
+      ]
+    },
+    {
+      "name": "Dugout Demons",
+      "players": [
+        { "name": "Gus Malone", "jersey_number": 13 },
+        { "name": "Felix Ortega", "jersey_number": 21 },
+        { "name": "Hank 'The Tank' Boyd", "jersey_number": 55 },
+        { "name": "Lou Castillo", "jersey_number": 6 },
+        { "name": "Micah Stone", "jersey_number": 10 },
+        { "name": "Ollie Fitzgerald", "jersey_number": 24 },
+        { "name": "Ray Baranski", "jersey_number": 33 },
+        { "name": "Tiny Lefebvre", "jersey_number": 40 }
+      ]
+    }
+  ]
+}
