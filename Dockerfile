@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ app/
 COPY static/ static/
 COPY seed.json seed.json
+COPY seed/ seed/
 
 # Runtime config (all overridable via compose / -e flags):
 #   DATA_DIR       — SQLite DB + clips/photos/sources live here (mounted volume)

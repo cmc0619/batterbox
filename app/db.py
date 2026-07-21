@@ -4,6 +4,7 @@ single-process and low-concurrency, so this stays simple (no ORM)."""
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -118,11 +119,14 @@ def _seed_if_empty(conn: sqlite3.Connection) -> None:
         if first_team_id is None:
             first_team_id = team_id
         for p_order, player in enumerate(team.get("players", [])):
-            conn.execute(
+            cur = conn.execute(
                 "INSERT INTO players (team_id, name, jersey_number, sort_order)"
                 " VALUES (?, ?, ?, ?)",
                 (team_id, player["name"], player.get("jersey_number"), p_order),
             )
+            player_id = cur.lastrowid
+            for clip in player.get("clips", []):
+                _seed_clip(conn, seed_file.parent, player_id, clip)
     if first_team_id is not None:
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_team_id', ?)",
@@ -130,6 +134,38 @@ def _seed_if_empty(conn: sqlite3.Connection) -> None:
         )
     conn.commit()
     log.info("Seeded database from %s", seed_file)
+
+
+def _seed_clip(conn: sqlite3.Connection, seed_dir: Path, player_id: int, clip: dict) -> None:
+    """Seed one clip row + copy its bundled mp3 (seed/clips/<file>) into
+    DATA_DIR/clips/<id>.mp3. Seeded clips have no source_file, so they are not
+    re-editable in the trim editor (re-import to re-trim)."""
+    src = seed_dir / "seed" / "clips" / clip["file"]
+    if not src.exists():
+        log.warning("Seed clip file missing: %s — skipping", src)
+        return
+    cur = conn.execute(
+        "INSERT INTO clips (player_id, type, is_active, source, source_url,"
+        " duration_sec, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms,"
+        " volume_boost_db, source_file, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+        (
+            player_id,
+            clip["type"],
+            1 if clip.get("is_active") else 0,
+            clip.get("source", "upload"),
+            clip.get("source_url"),
+            clip["duration_sec"],
+            clip["trim_start_sec"],
+            clip["trim_end_sec"],
+            clip.get("fade_in_ms", 300),
+            clip.get("fade_out_ms", 500),
+            clip.get("volume_boost_db", 0.0),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    dst = os.path.join(config.DATA_DIR, "clips", f"{cur.lastrowid}.mp3")
+    shutil.copyfile(src, dst)
 
 
 # ---------------------------------------------------------------- settings
