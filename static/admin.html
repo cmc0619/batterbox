@@ -22,14 +22,17 @@
 
   <section class="section" id="teams-section">
     <h2>Teams Config</h2>
-    <div class="team-chips" id="team-chips"></div>
     <div class="form-row active-team-row">
       <label for="active-team-select">Kiosk team:</label>
       <select id="active-team-select" aria-label="Active team on kiosk"></select>
     </div>
+    <div class="form-row active-team-row">
+      <label for="config-team-select">Edit team:</label>
+      <select id="config-team-select" aria-label="Team to configure"></select>
+    </div>
     <div class="form-row">
-      <button type="button" id="btn-rename-team">Rename Selected</button>
-      <button type="button" class="btn-danger" id="btn-delete-team">Delete Selected</button>
+      <button type="button" id="btn-rename-team">Rename</button>
+      <button type="button" class="btn-danger" id="btn-delete-team">Delete</button>
     </div>
     <div class="form-row">
       <input id="new-team-name" placeholder="New team name" autocomplete="off">
