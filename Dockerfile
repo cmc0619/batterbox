@@ -23,6 +23,8 @@ COPY app/ app/
 COPY static/ static/
 COPY seed.json seed.json
 COPY seed/ seed/
+COPY docker-entrypoint.sh docker-entrypoint.sh
+RUN chmod +x docker-entrypoint.sh
 
 # Runtime config (all overridable via compose / -e flags):
 #   DATA_DIR       — SQLite DB + clips/photos/sources live here (mounted volume)
@@ -45,4 +47,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -fsS "http://localhost:8080/api/settings" || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["./docker-entrypoint.sh"]
