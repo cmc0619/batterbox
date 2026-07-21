@@ -10,20 +10,19 @@
 <body class="kiosk">
 <div id="kiosk">
   <div id="topbar">
-    <select id="team-select" aria-label="Active team"></select>
+    <div id="team-name" aria-label="Active team">BatterBox</div>
+    <button type="button" class="page-arrow" id="page-prev" hidden aria-label="Previous page">&#8249;</button>
+    <div id="page-indicator" hidden></div>
+    <button type="button" class="page-arrow" id="page-next" hidden aria-label="Next page">&#8250;</button>
     <button type="button" class="vol-btn" id="vol-down" aria-label="Volume down">−</button>
     <span class="vol-label" id="vol-label">–</span>
     <button type="button" class="vol-btn" id="vol-up" aria-label="Volume up">+</button>
     <button type="button" id="btn-stop">&#9632; STOP</button>
-    <button type="button" id="btn-bt" aria-label="Bluetooth speaker pairing" title="Bluetooth"><span class="bt-dot" aria-hidden="true"></span>BT</button>
     <a class="nav-btn" href="admin.html">ADMIN</a>
   </div>
   <div class="banner" id="warn-banner" role="alert"></div>
   <div id="grid-wrap">
     <div id="grid" aria-label="Players"></div>
-    <button type="button" class="page-arrow" id="page-prev" hidden aria-label="Previous page">&#8249;</button>
-    <button type="button" class="page-arrow" id="page-next" hidden aria-label="Next page">&#8250;</button>
-    <div id="page-indicator" hidden></div>
     <div id="walter"><img src="img/walter.svg" alt="Walter Walkup"></div>
   </div>
   <div id="phone-list" aria-label="Players"></div>

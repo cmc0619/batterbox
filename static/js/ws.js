@@ -53,6 +53,10 @@ function emit(event, msg) {
 
 const audio = new Audio();
 audio.preload = 'auto';
+// Song finished naturally → tell the server (same path as the STOP button)
+// so every client clears the playing state: tile highlight + Walter.
+// Without this the server thinks the clip plays forever.
+audio.addEventListener('ended', () => { playback.stop().catch(() => {}); });
 let actx = null;
 let gainNode = null;
 let boostRouted = false;

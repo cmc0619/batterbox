@@ -11,6 +11,7 @@
 <header class="admin-header">
   <h1>BatterBox Admin</h1>
   <nav>
+    <button type="button" id="btn-bt" aria-label="Bluetooth speaker pairing" title="Bluetooth"><span class="bt-dot" aria-hidden="true"></span>BT</button>
     <a class="nav-btn" href="index.html">&#9664; KIOSK</a>
   </nav>
 </header>
@@ -27,8 +28,11 @@
       <input id="new-team-name" placeholder="New team name" autocomplete="off">
       <button type="button" class="btn-primary" id="btn-add-team">Add Team</button>
     </div>
+    <div class="form-row active-team-row">
+      <label for="active-team-select">Kiosk team:</label>
+      <select id="active-team-select" aria-label="Active team on kiosk"></select>
+    </div>
     <div class="form-row">
-      <button type="button" class="btn-ok" id="btn-set-active">Set Selected Team Active</button>
       <button type="button" id="btn-rename-team">Rename Selected</button>
       <button type="button" class="btn-danger" id="btn-delete-team">Delete Selected</button>
     </div>
