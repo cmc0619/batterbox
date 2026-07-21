@@ -32,3 +32,4 @@ _(append dated entries whenever something bites)_
 - 2026-07-21: Git Bash mangles container paths in `docker exec` (e.g. `/data/x` → `C:/Program Files/Git/data/x`). Prefix with `MSYS_NO_PATHCONV=1`.
 - 2026-07-21: `docker compose restart` has no `-q` flag (Docker Compose 2.29+); use plain `restart` and redirect output.
 - 2026-07-21: First-run smoke test needs a real clip — playback endpoints correctly 404 until a player has an active clip of the requested type.
+- 2026-07-21: Vendored wavesurfer core and regions plugin are NOT from the same release line: plugin `Region.play()` only forwards `end` when called with a truthy arg (`region.play(true)`), and `loop` is unsupported/ignored. Always preview via core `ws.play(region.start, region.end)` — it stops at `end` via `stopAtPosition`. If re-vendoring, grab both dist files from the same exact version.

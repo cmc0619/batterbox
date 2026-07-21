@@ -143,7 +143,6 @@ function initEditor(job) {
       color: 'rgba(255, 183, 3, 0.30)',
       drag: true,
       resize: true,
-      loop: true,
     });
     region.on('update', updateReadout);
     updateReadout();
@@ -159,7 +158,7 @@ function initEditor(job) {
 previewBtn.addEventListener('click', () => {
   if (!ws || !region) return;
   if (ws.isPlaying()) ws.pause();
-  else region.play(); // loop:true on the region keeps it looping until pause
+  else ws.play(region.start, region.end); // core stops at end; plugin's region.play() drops end when called w/o args
 });
 
 saveBtn.addEventListener('click', async () => {
