@@ -3,9 +3,29 @@
     {
       "name": "Sandlot Sluggers",
       "players": [
-        { "name": "Bobby 'Rocket' Reyes", "jersey_number": 3 },
-        { "name": "Tommy Delgado", "jersey_number": 7 },
-        { "name": "Marcus 'Big Cat' Cole", "jersey_number": 22 },
+        {
+          "name": "Bobby 'Rocket' Reyes",
+          "jersey_number": 3,
+          "clips": [
+            { "type": "walkup", "is_active": true, "source": "youtube", "source_url": "https://www.youtube.com/shorts/B2rEnYfktDk", "file": "reyes-walkup.mp3", "duration_sec": 14.0, "trim_start_sec": 4.0, "trim_end_sec": 18.0, "fade_in_ms": 300, "fade_out_ms": 500, "volume_boost_db": 0.0 },
+            { "type": "homerun", "is_active": true, "source": "youtube", "source_url": "https://www.youtube.com/watch?v=fnlJw9H0xAM", "file": "reyes-homerun.mp3", "duration_sec": 17.471, "trim_start_sec": 116.78755000000007, "trim_end_sec": 134.25865000000053, "fade_in_ms": 300, "fade_out_ms": 500, "volume_boost_db": 0.0 }
+          ]
+        },
+        {
+          "name": "Tommy Delgado",
+          "jersey_number": 7,
+          "clips": [
+            { "type": "walkup", "is_active": true, "source": "youtube", "source_url": "https://www.youtube.com/watch?v=JGhoLcsr8GA", "file": "delgado-walkup.mp3", "duration_sec": 14.523, "trim_start_sec": 14.450150000000004, "trim_end_sec": 28.97309999999993, "fade_in_ms": 300, "fade_out_ms": 500, "volume_boost_db": 0.0 },
+            { "type": "homerun", "is_active": true, "source": "youtube", "source_url": "https://www.youtube.com/watch?v=otwGb-S0txk", "file": "delgado-homerun.mp3", "duration_sec": 24.83, "trim_start_sec": 87.84147500000003, "trim_end_sec": 112.67145000000005, "fade_in_ms": 300, "fade_out_ms": 500, "volume_boost_db": 0.0 }
+          ]
+        },
+        {
+          "name": "Marcus 'Big Cat' Cole",
+          "jersey_number": 22,
+          "clips": [
+            { "type": "walkup", "is_active": true, "source": "youtube", "source_url": "https://www.youtube.com/watch?v=SvOG90krtt4", "file": "cole-walkup.mp3", "duration_sec": 12.017, "trim_start_sec": 0.0, "trim_end_sec": 12.016949999999984, "fade_in_ms": 300, "fade_out_ms": 500, "volume_boost_db": 0.0 }
+          ]
+        },
         { "name": "Jimmy Okafor", "jersey_number": 11 },
         { "name": "Danny Fuentes", "jersey_number": 5 },
         { "name": "Eddie Kowalski", "jersey_number": 44 },
