@@ -1,0 +1,35 @@
+# BatterBox — Raspberry Pi overrides.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+#
+# This layer adds real hardware access and flips GPIO to live mode.
+
+services:
+  app:
+    devices:
+      # GPIO edge detection for the physical STOP / next-batter / volume
+      # buttons wired to the Pi's header. /dev/gpiomem avoids running the
+      # container privileged.
+      - /dev/gpiomem:/dev/gpiomem
+      # ALSA sound card for server-side playback via mpv.
+      - /dev/snd:/dev/snd
+    environment:
+      MOCK_GPIO: "false"
+      # AUDIO_BACKEND — how the crowd hears the song:
+      #
+      #   browser (default) — audio plays in Chromium on the Pi's own
+      #     display, i.e. the kiosk browser is the speaker. The Pi needs
+      #     no extra audio config in Docker; sound goes out the 3.5mm jack
+      #     or HDMI via the normal desktop audio stack. This is the
+      #     recommended field setup: run kiosk/start-kiosk.sh on the Pi
+      #     desktop and plug speakers into the Pi.
+      #
+      #   server — mpv runs INSIDE the container and talks straight to
+      #     ALSA (/dev/snd). Use this if you don't want a browser open on
+      #     the Pi (headless, phones-only operation). Requires the
+      #     /dev/snd device mapping above, and AUDIO_OUTPUT set to your
+      #     ALSA device if "auto" picks the wrong one (e.g. "plughw:1,0"
+      #     for a USB audio dongle).
+      #
+      # AUDIO_BACKEND: server
+      AUDIO_OUTPUT: ${AUDIO_OUTPUT:-auto}
+    restart: unless-stopped

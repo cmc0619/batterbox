@@ -1,0 +1,47 @@
+# BatterBox — single all-in-one image (FastAPI backend + static frontend)
+# Runs on PC (dev, mock GPIO) and Raspberry Pi (arm64, real GPIO/audio).
+
+FROM python:3.12-slim
+
+# ffmpeg   — clip slicing, fades, loudnorm in the clip pipeline
+# mpv      — server-side audio playback (AUDIO_BACKEND=server, used on the Pi)
+# curl     — used by HEALTHCHECK and handy for debugging inside the container
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg mpv curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv
+
+# Deps first so app-code changes don't bust the pip layer cache.
+# requirements.txt includes fastapi, uvicorn, pinned yt-dlp, and gpiozero.
+# gpiozero is pure Python so it installs fine on x86 too; the backend falls
+# back to mock GPIO at runtime when real GPIO hardware is absent.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app/ app/
+COPY static/ static/
+COPY seed.json seed.json
+
+# Runtime config (all overridable via compose / -e flags):
+#   DATA_DIR       — SQLite DB + clips/photos/sources live here (mounted volume)
+#   PORT           — HTTP port uvicorn listens on
+#   MOCK_GPIO      — true = keyboard mock buttons instead of real GPIO
+#   AUDIO_BACKEND  — browser = clients play audio via HTMLAudioElement;
+#                    server  = mpv inside the container to the sound card
+#   AUDIO_OUTPUT   — mpv/ALSA device hint ("auto" picks the default device)
+ENV DATA_DIR=/data \
+    PORT=8080 \
+    MOCK_GPIO=true \
+    AUDIO_BACKEND=browser \
+    AUDIO_OUTPUT=auto
+
+VOLUME /data
+
+EXPOSE 8080
+
+# PORT is baked in at 8080 above; compose always maps host:container as 8080:8080.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS "http://localhost:8080/api/settings" || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

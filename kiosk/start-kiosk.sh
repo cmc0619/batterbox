@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# BatterBox kiosk launcher — runs on the Raspberry Pi OS desktop (host, not Docker).
+#
+# Waits for the BatterBox container to answer on localhost:8080, then opens
+# Chromium full-screen (kiosk) tuned for the 1024x600 official touchscreen.
+#
+# Autostart on boot (Raspberry Pi OS with a desktop session):
+#   mkdir -p ~/.config/autostart
+#   cp kiosk/batterbox-kiosk.desktop ~/.config/autostart/batterbox-kiosk.desktop
+# (The .desktop file sits next to this script; edit the Exec= path inside it
+#  if you cloned the repo somewhere other than /home/pi/batterbox.)
+
+set -u
+
+URL="${BATTERBOX_URL:-http://localhost:8080}"
+MAX_WAIT="${BATTERBOX_KIOSK_WAIT:-120}"   # seconds to wait for the app
+
+echo "[batterbox-kiosk] waiting for ${URL} (up to ${MAX_WAIT}s)..."
+elapsed=0
+until curl -fsS --max-time 2 "${URL}/api/settings" >/dev/null 2>&1; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    if [ "${elapsed}" -ge "${MAX_WAIT}" ]; then
+        echo "[batterbox-kiosk] app did not come up in ${MAX_WAIT}s — starting browser anyway"
+        break
+    fi
+done
+echo "[batterbox-kiosk] app is up after ~${elapsed}s"
+
+# Find a Chromium binary: Raspberry Pi OS names it chromium-browser on older
+# releases, chromium on newer ones.
+CHROMIUM=""
+for bin in chromium-browser chromium chromium-browser-stable google-chrome; do
+    if command -v "${bin}" >/dev/null 2>&1; then
+        CHROMIUM="${bin}"
+        break
+    fi
+done
+
+if [ -z "${CHROMIUM}" ]; then
+    echo "[batterbox-kiosk] ERROR: no Chromium found (tried chromium-browser, chromium)." >&2
+    echo "[batterbox-kiosk] Install it with: sudo apt install chromium-browser" >&2
+    exit 1
+fi
+
+echo "[batterbox-kiosk] launching ${CHROMIUM} in kiosk mode at ${URL}"
+exec "${CHROMIUM}" \
+    --kiosk "${URL}" \
+    --window-size=1024,600 \
+    --start-fullscreen \
+    --incognito \
+    --noerrdialogs \
+    --disable-session-crashed-bubble \
+    --disable-infobars \
+    --disable-translate \
+    --disable-features=TranslateUI \
+    --autoplay-policy=no-user-gesture-required \
+    --check-for-update-interval=31536000 \
+    --overscroll-history-navigation=0 \
+    --disable-pinch \
+    --touch-events=enabled
