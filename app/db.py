@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS clips (
   fade_in_ms INTEGER NOT NULL DEFAULT 0,
   fade_out_ms INTEGER NOT NULL DEFAULT 0,
   volume_boost_db REAL NOT NULL DEFAULT 0,
+  source_file TEXT,
   created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS settings (
@@ -68,6 +69,7 @@ def init_db() -> None:
     with _lock:
         conn = get_conn()
         conn.executescript(SCHEMA)
+        _migrate(conn)
         for sub in ("clips", "sources", "photos"):
             os.makedirs(os.path.join(config.DATA_DIR, sub), exist_ok=True)
         defaults = {
@@ -87,6 +89,15 @@ def init_db() -> None:
             )
         conn.commit()
         _seed_if_empty(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Non-destructive column additions for DBs created by older versions."""
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(clips)")]
+    if "source_file" not in cols:
+        conn.execute("ALTER TABLE clips ADD COLUMN source_file TEXT")
+        conn.commit()
+        log.info("Migrated clips table: added source_file column")
 
 
 def _seed_if_empty(conn: sqlite3.Connection) -> None:
@@ -426,14 +437,15 @@ def insert_clip(
     fade_in_ms: int,
     fade_out_ms: int,
     volume_boost_db: float,
+    source_file: str | None = None,
 ) -> int:
     with _lock:
         conn = get_conn()
         cur = conn.execute(
             "INSERT INTO clips (player_id, type, is_active, source, source_url,"
             " duration_sec, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms,"
-            " volume_boost_db, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " volume_boost_db, source_file, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 player_id,
                 clip_type,
@@ -446,11 +458,48 @@ def insert_clip(
                 fade_in_ms,
                 fade_out_ms,
                 volume_boost_db,
+                source_file,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
         conn.commit()
         return cur.lastrowid
+
+
+def get_clip_source_file(clip_id: int) -> str | None:
+    """Internal: relative filename of the clip's full-length source in sources/."""
+    with _lock:
+        row = get_conn().execute(
+            "SELECT source_file FROM clips WHERE id = ?", (clip_id,)
+        ).fetchone()
+    return row["source_file"] if row else None
+
+
+def update_clip_trim(
+    clip_id: int,
+    duration_sec: float,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+    volume_boost_db: float,
+) -> None:
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE clips SET duration_sec = ?, trim_start_sec = ?, trim_end_sec = ?,"
+            " fade_in_ms = ?, fade_out_ms = ?, volume_boost_db = ? WHERE id = ?",
+            (
+                duration_sec,
+                trim_start_sec,
+                trim_end_sec,
+                fade_in_ms,
+                fade_out_ms,
+                volume_boost_db,
+                clip_id,
+            ),
+        )
+        conn.commit()
 
 
 def activate_clip(clip_id: int) -> None:

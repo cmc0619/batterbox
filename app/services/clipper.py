@@ -34,6 +34,10 @@ class RenderError(Exception):
     """Raised when the ffmpeg render pass fails."""
 
 
+class SourceMissingError(Exception):
+    """Raised when a clip's stored source file is absent (or never recorded)."""
+
+
 # -------------------------------------------------------------- job intake
 
 
@@ -213,6 +217,118 @@ def _loudest_window(samples: array, duration: float, snippet: float) -> float | 
 # ------------------------------------------------------------------ render
 
 
+def _render(
+    src: str,
+    dst: str,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    duration: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+) -> None:
+    """One ffmpeg pass: slice + afade + loudnorm -> 192k MP3 at `dst`."""
+    filters = []
+    if fade_in_ms > 0:
+        filters.append(f"afade=t=in:st=0:d={fade_in_ms / 1000:.3f}")
+    if fade_out_ms > 0:
+        out_st = max(0.0, duration - fade_out_ms / 1000)
+        filters.append(f"afade=t=out:st={out_st:.3f}:d={fade_out_ms / 1000:.3f}")
+    filters.append("loudnorm")  # EBU R128
+    cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-ss", f"{trim_start_sec:.3f}", "-to", f"{trim_end_sec:.3f}",
+        "-i", src, "-vn",
+        "-af", ",".join(filters),
+        "-b:a", "192k", dst,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except FileNotFoundError:
+        raise RenderError("ffmpeg is not installed") from None
+    if proc.returncode != 0:
+        raise RenderError(f"ffmpeg render failed: {proc.stderr.strip()[:500]}")
+
+
+def _source_path_for_clip(clip_id: int) -> str:
+    source_file = db.get_clip_source_file(clip_id)
+    if not source_file:
+        raise SourceMissingError(
+            "clip has no stored source file (saved before re-edit support)"
+        )
+    path = os.path.join(config.DATA_DIR, "sources", source_file)
+    if not os.path.exists(path):
+        raise SourceMissingError(
+            f"source file '{source_file}' no longer exists on disk"
+        )
+    return path
+
+
+def edit_context(clip_id: int) -> dict:
+    """Everything the editor needs to re-open a saved clip's trim."""
+    path = _source_path_for_clip(clip_id)
+    try:
+        duration = _ffprobe_duration(path)
+        peaks = _peaks(_decode_pcm(path))
+    except FileNotFoundError as e:
+        raise RenderError(
+            f"missing binary: {e.filename or e} (ffmpeg/ffprobe required)"
+        ) from None
+    return {
+        "clip": db.get_clip(clip_id),
+        "source_audio_url": "/media/sources/" + os.path.basename(path),
+        "duration_sec": round(duration, 3),
+        "peaks": peaks,
+    }
+
+
+def rerender_clip(
+    clip_id: int,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+    volume_boost_db: float,
+) -> dict:
+    """Re-render a saved clip from its stored source with new trim settings."""
+    src = _source_path_for_clip(clip_id)
+    if trim_start_sec < 0:
+        raise JobError("trim_start_sec must be >= 0")
+    if trim_end_sec <= trim_start_sec:
+        raise JobError("trim_end_sec must be greater than trim_start_sec")
+    if fade_in_ms < 0 or fade_out_ms < 0:
+        raise JobError("fade_in_ms and fade_out_ms must be >= 0")
+    try:
+        src_duration = _ffprobe_duration(src)
+    except FileNotFoundError as e:
+        raise RenderError(
+            f"missing binary: {e.filename or e} (ffmpeg/ffprobe required)"
+        ) from None
+    if trim_end_sec > src_duration:
+        raise JobError(
+            f"trim_end_sec exceeds source duration ({src_duration:.3f}s)"
+        )
+    duration = round(trim_end_sec - trim_start_sec, 3)
+    dst = os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3")
+    tmp = os.path.join(config.DATA_DIR, "clips", f"{clip_id}.tmp.mp3")
+    try:
+        _render(src, tmp, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
+        os.replace(tmp, dst)  # atomic-ish: never a half-written clip file
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    db.update_clip_trim(
+        clip_id,
+        duration_sec=duration,
+        trim_start_sec=trim_start_sec,
+        trim_end_sec=trim_end_sec,
+        fade_in_ms=fade_in_ms,
+        fade_out_ms=fade_out_ms,
+        volume_boost_db=volume_boost_db,
+    )
+    return db.get_clip(clip_id)
+
+
 def create_clip(
     job_id: str,
     player_id: int,
@@ -245,29 +361,11 @@ def create_clip(
         fade_in_ms=fade_in_ms,
         fade_out_ms=fade_out_ms,
         volume_boost_db=volume_boost_db,
+        source_file=os.path.basename(src),
     )
     dst = os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3")
-    filters = []
-    if fade_in_ms > 0:
-        filters.append(f"afade=t=in:st=0:d={fade_in_ms / 1000:.3f}")
-    if fade_out_ms > 0:
-        out_st = max(0.0, duration - fade_out_ms / 1000)
-        filters.append(f"afade=t=out:st={out_st:.3f}:d={fade_out_ms / 1000:.3f}")
-    filters.append("loudnorm")  # EBU R128
-    cmd = [
-        "ffmpeg", "-y", "-v", "error",
-        "-ss", f"{trim_start_sec:.3f}", "-to", f"{trim_end_sec:.3f}",
-        "-i", src, "-vn",
-        "-af", ",".join(filters),
-        "-b:a", "192k", dst,
-    ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if proc.returncode != 0:
-            raise RenderError(f"ffmpeg render failed: {proc.stderr.strip()[:500]}")
-    except FileNotFoundError:
-        db.delete_clip(clip_id)
-        raise RenderError("ffmpeg is not installed") from None
+        _render(src, dst, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
     except Exception:
         db.delete_clip(clip_id)
         raise
