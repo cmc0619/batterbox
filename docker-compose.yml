@@ -21,4 +21,5 @@ services:
       AUDIO_OUTPUT: ${AUDIO_OUTPUT:-auto}
       PORT: ${PORT:-8080}
       DATA_DIR: /data
+      YTDLP_AUTO_UPDATE: ${YTDLP_AUTO_UPDATE:-true}
     restart: unless-stopped

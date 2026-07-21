@@ -127,6 +127,7 @@ All env vars, settable in `docker-compose.yml` / `.env` / shell:
 | `MOCK_GPIO`     | `true`    | `true` = keyboard/on-screen mock buttons; `false` = real GPIO (Pi)      |
 | `AUDIO_BACKEND` | `browser` | `browser` = clients play audio; `server` = mpv in-container to ALSA     |
 | `AUDIO_OUTPUT`  | `auto`    | ALSA device hint for server playback (e.g. `plughw:1,0`)                |
+| `YTDLP_AUTO_UPDATE` | `true` | `true` = upgrade yt-dlp to latest at container start when online        |
 
 Playback settings (default snippet length, master volume) are also editable live in admin.
 
@@ -146,7 +147,9 @@ Physical buttons call the same playback API as the touchscreen — one code path
 ## Troubleshooting
 
 - **"No audio output device found" warning** — the app couldn't find a sound device. With `browser` backend this is just informational (browsers play their own audio); with `server` backend, check that `/dev/snd` is mapped (Pi compose file), the speaker is plugged in before container start, and try setting `AUDIO_OUTPUT` explicitly (`aplay -l` on the Pi lists devices).
-- **YouTube imports fail** — YouTube changes its internals regularly; yt-dlp is pinned in `requirements.txt` for exactly this reason. Bump the pin to the latest release:
+- **YouTube imports fail** — YouTube changes its internals regularly; yt-dlp answers with frequent releases. Two layers of defense:
+  1. **At every container start with internet access, BatterBox auto-upgrades yt-dlp to the latest release** (check `docker compose logs app` for the `[entrypoint] yt-dlp` line). Offline (the field), it silently keeps the baked-in version. Disable with `YTDLP_AUTO_UPDATE=false`.
+  2. The pin in `requirements.txt` is the known-good fallback baked into the image — what you tested at home is what runs at the field. If imports break even after the auto-update, bump the pin and rebuild:
 
   ```bash
   pip index versions yt-dlp          # or check https://github.com/yt-dlp/yt-dlp/releases
