@@ -543,7 +543,6 @@ BB.on('warning', (msg) => showBanner(msg.message, false));
 
 (async () => {
   BB.connect();
-  BB.initMockGPIO(document.getElementById('mock-gpio'));
   refreshBt();
   try {
     await loadTeams();
