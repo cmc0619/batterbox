@@ -151,11 +151,15 @@ a { color: var(--accent-2); }
   height: 92px;
   flex: 0 0 auto;
 }
-#topbar select {
+#topbar #team-name {
   flex: 1 1 auto;
-  font-size: 26px;
-  font-weight: 800;
   min-width: 0;
+  align-self: center;
+  font-size: 30px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 #topbar .vol-label {
   align-self: center;
@@ -257,8 +261,8 @@ a { color: var(--accent-2); }
   transform: scale(0.97);
 }
 .tile .photo {
-  width: 76px;
-  height: 76px;
+  width: 54px;
+  height: 54px;
   border-radius: 50%;
   object-fit: cover;
   background: var(--panel-2);
@@ -266,8 +270,8 @@ a { color: var(--accent-2); }
   flex: 0 0 auto;
 }
 .tile .jersey-ph {
-  width: 76px;
-  height: 76px;
+  width: 54px;
+  height: 54px;
   border-radius: 50%;
   background: var(--panel-2);
   border: 2px solid var(--accent-2);
@@ -275,12 +279,12 @@ a { color: var(--accent-2); }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 34px;
+  font-size: 26px;
   font-weight: 900;
   flex: 0 0 auto;
 }
 .tile .pname {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 800;
   line-height: 1.05;
   text-align: center;
@@ -288,12 +292,29 @@ a { color: var(--accent-2); }
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  /* wrap to two lines instead of truncating — dugout-readable names */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
 }
 .tile .jnum {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--dim);
+}
+.active-team-row { align-items: center; font-size: 20px; font-weight: 800; }
+.active-team-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 56px;
+  font-size: 22px;
+  font-weight: 800;
+  background: var(--panel);
+  color: var(--text);
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
 }
 .tile.empty {
   background: transparent;
@@ -312,35 +333,29 @@ a { color: var(--accent-2); }
   animation: tilePulse 1s ease-in-out infinite;
 }
 
-.page-arrow {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 5;
-  min-width: 84px;
-  height: 120px;
-  font-size: 48px;
+/* paging lives in the top bar (was overlaying the grid, covering edge tiles) */
+#topbar .page-arrow {
+  position: static;
+  transform: none;
+  min-width: 64px;
+  height: auto;
+  font-size: 40px;
   font-weight: 900;
-  background: rgba(30, 40, 54, 0.92);
+  background: var(--panel);
   border: 3px solid var(--accent-2);
-  border-radius: 16px;
+  border-radius: 12px;
   color: var(--accent-2);
 }
-#page-prev { left: 8px; }
-#page-next { right: 8px; }
 .page-arrow[hidden] { display: none; }
 
-#page-indicator {
-  position: absolute;
-  bottom: 6px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 20px;
+#topbar #page-indicator {
+  position: static;
+  transform: none;
+  align-self: center;
+  font-size: 18px;
   font-weight: 800;
   color: var(--dim);
-  background: rgba(13,17,23,.8);
-  padding: 2px 14px;
-  border-radius: 999px;
+  white-space: nowrap;
 }
 
 /* Walter mascot */

@@ -8,7 +8,7 @@ const LONG_PRESS_MS = 600;
 
 const gridEl = document.getElementById('grid');
 const phoneListEl = document.getElementById('phone-list');
-const teamSelect = document.getElementById('team-select');
+const teamNameEl = document.getElementById('team-name');
 const volLabel = document.getElementById('vol-label');
 const banner = document.getElementById('warn-banner');
 const walter = document.getElementById('walter');
@@ -154,13 +154,6 @@ async function loadTeams() {
     BB.api('/api/teams'),
     BB.api('/api/teams/active'),
   ]);
-  teamSelect.textContent = '';
-  for (const t of teams) {
-    const opt = document.createElement('option');
-    opt.value = t.id;
-    opt.textContent = t.name;
-    teamSelect.appendChild(opt);
-  }
   const selected = teams.some((t) => t.id === active.team_id)
     ? active.team_id
     : (teams[0] && teams[0].id);
@@ -170,17 +163,10 @@ async function loadTeams() {
     showBanner('No teams yet — open ADMIN to create one.');
     return;
   }
-  teamSelect.value = String(selected);
+  const team = teams.find((t) => t.id === selected);
+  teamNameEl.textContent = team ? team.name : 'BatterBox';
   await loadPlayers(selected);
 }
-
-teamSelect.addEventListener('change', async () => {
-  const id = Number(teamSelect.value);
-  try {
-    await BB.api('/api/teams/active', { method: 'POST', body: { team_id: id } });
-    await loadPlayers(id);
-  } catch (err) { showBanner(err.message, false); }
-});
 
 /* ---------------- controls ---------------- */
 
@@ -198,49 +184,6 @@ pageNext.addEventListener('click', () => {
   page = Math.min(Math.ceil(players.length / PAGE_SIZE) - 1, page + 1);
   render();
 });
-
-/* ---------------- Bluetooth speaker pairing ---------------- */
-
-const btBtn = document.getElementById('btn-bt');
-let btStatus = { available: false, pairing: false, detail: '', devices: [] };
-
-function renderBt() {
-  const connected = (btStatus.devices || []).find((d) => d.connected);
-  btBtn.classList.toggle('pairing', !!btStatus.pairing);
-  btBtn.classList.toggle('connected', !btStatus.pairing && !!connected);
-  const hint = btStatus.pairing
-    ? 'Pairing… tap to stop'
-    : connected
-      ? `Connected: ${connected.name}`
-      : (btStatus.detail || 'Bluetooth');
-  btBtn.title = hint;
-  btBtn.setAttribute('aria-label', `Bluetooth — ${hint}`);
-}
-
-async function refreshBt() {
-  try {
-    btStatus = await BB.api('/api/bluetooth/status');
-  } catch { /* backend older than this feature — leave last state */ }
-  renderBt();
-}
-
-btBtn.addEventListener('click', async () => {
-  try {
-    await refreshBt();
-    if (!btStatus.available) {
-      showBanner(`Bluetooth unavailable: ${btStatus.detail}`, false);
-      return;
-    }
-    btStatus = btStatus.pairing
-      ? await BB.api('/api/bluetooth/pairing/stop', { method: 'POST' })
-      : await BB.api('/api/bluetooth/pairing', { method: 'POST', body: { duration_sec: 120 } });
-    renderBt();
-  } catch (err) {
-    showBanner(err.message, false);
-    refreshBt();
-  }
-});
-setInterval(refreshBt, 5000);
 
 /* ---------------- WebSocket wiring ---------------- */
 
@@ -260,7 +203,6 @@ BB.on('warning', (msg) => showBanner(msg.message));
   BB.connect();
   BB.initMockGPIO(document.getElementById('mock-gpio'));
   volLabel.textContent = BB.getVolume();
-  refreshBt();
   try {
     await loadTeams();
   } catch (err) {

@@ -84,7 +84,27 @@ function renderTeams() {
   }
   const sel = teams.find((t) => t.id === selectedTeamId);
   playersTeamName.textContent = sel ? sel.name : '—';
+  // kiosk active-team dropdown
+  const dd = document.getElementById('active-team-select');
+  dd.textContent = '';
+  for (const t of teams) {
+    const opt = document.createElement('option');
+    opt.value = t.id;
+    opt.textContent = t.name;
+    dd.appendChild(opt);
+  }
+  if (activeTeamId != null) dd.value = String(activeTeamId);
 }
+
+document.getElementById('active-team-select').addEventListener('change', async (e) => {
+  const id = Number(e.target.value);
+  try {
+    await BB.api('/api/teams/active', { method: 'POST', body: { team_id: id } });
+    activeTeamId = id;
+    renderTeams();
+    showBanner('Kiosk team saved — back to KIOSK to see it.', false);
+  } catch (err) { showBanner(err.message, false); }
+});
 
 async function loadTeams() {
   const [ts, active] = await Promise.all([
@@ -136,14 +156,6 @@ document.getElementById('btn-delete-team').addEventListener('click', async () =>
     openPlayerId = null;
     await loadTeams();
     await loadPlayers();
-  } catch (err) { showBanner(err.message, false); }
-});
-
-document.getElementById('btn-set-active').addEventListener('click', async () => {
-  if (selectedTeamId == null) return;
-  try {
-    await BB.api('/api/teams/active', { method: 'POST', body: { team_id: selectedTeamId } });
-    await loadTeams();
   } catch (err) { showBanner(err.message, false); }
 });
 
@@ -480,6 +492,49 @@ document.getElementById('btn-add-player').addEventListener('click', async () => 
   } catch (err) { showBanner(err.message, false); }
 });
 
+/* ---------------- Bluetooth speaker pairing ---------------- */
+
+const btBtn = document.getElementById('btn-bt');
+let btStatus = { available: false, pairing: false, detail: '', devices: [] };
+
+function renderBt() {
+  const connected = (btStatus.devices || []).find((d) => d.connected);
+  btBtn.classList.toggle('pairing', !!btStatus.pairing);
+  btBtn.classList.toggle('connected', !btStatus.pairing && !!connected);
+  const hint = btStatus.pairing
+    ? 'Pairing… tap to stop'
+    : connected
+      ? `Connected: ${connected.name}`
+      : (btStatus.detail || 'Bluetooth');
+  btBtn.title = hint;
+  btBtn.setAttribute('aria-label', `Bluetooth — ${hint}`);
+}
+
+async function refreshBt() {
+  try {
+    btStatus = await BB.api('/api/bluetooth/status');
+  } catch { /* backend older than this feature — leave last state */ }
+  renderBt();
+}
+
+btBtn.addEventListener('click', async () => {
+  try {
+    await refreshBt();
+    if (!btStatus.available) {
+      showBanner(`Bluetooth unavailable: ${btStatus.detail}`, false);
+      return;
+    }
+    btStatus = btStatus.pairing
+      ? await BB.api('/api/bluetooth/pairing/stop', { method: 'POST' })
+      : await BB.api('/api/bluetooth/pairing', { method: 'POST', body: { duration_sec: 120 } });
+    renderBt();
+  } catch (err) {
+    showBanner(err.message, false);
+    refreshBt();
+  }
+});
+setInterval(refreshBt, 5000);
+
 /* ---------------- WebSocket (volume sync for mock GPIO) ---------------- */
 
 BB.on('warning', (msg) => showBanner(msg.message, false));
@@ -489,6 +544,7 @@ BB.on('warning', (msg) => showBanner(msg.message, false));
 (async () => {
   BB.connect();
   BB.initMockGPIO(document.getElementById('mock-gpio'));
+  refreshBt();
   try {
     await loadTeams();
     await loadPlayers();
