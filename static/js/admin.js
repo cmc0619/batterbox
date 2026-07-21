@@ -4,7 +4,6 @@
 import { BB } from './ws.js';
 
 const banner = document.getElementById('warn-banner');
-const chipsEl = document.getElementById('team-chips');
 const listEl = document.getElementById('player-list');
 const playersTeamName = document.getElementById('players-team-name');
 
@@ -61,40 +60,32 @@ function fmtDur(sec) {
 /* ---------------- teams ---------------- */
 
 function renderTeams() {
-  chipsEl.textContent = '';
+  const kioskDd = document.getElementById('active-team-select');
+  const configDd = document.getElementById('config-team-select');
+  kioskDd.textContent = '';
+  configDd.textContent = '';
   for (const t of teams) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'team-chip' + (t.id === selectedTeamId ? ' selected' : '');
-    b.textContent = t.name;
-    if (t.id === activeTeamId) {
-      const star = document.createElement('span');
-      star.className = 'active-star';
-      star.textContent = ' ★';
-      star.title = 'Active team';
-      b.appendChild(star);
-    }
-    b.addEventListener('click', async () => {
-      selectedTeamId = t.id;
-      openPlayerId = null;
-      renderTeams();
-      await loadPlayers();
-    });
-    chipsEl.appendChild(b);
+    const ko = document.createElement('option');
+    ko.value = t.id;
+    ko.textContent = t.name;
+    kioskDd.appendChild(ko);
+    const co = document.createElement('option');
+    co.value = t.id;
+    co.textContent = t.id === activeTeamId ? `${t.name} ★` : t.name;
+    configDd.appendChild(co);
   }
+  if (activeTeamId != null) kioskDd.value = String(activeTeamId);
+  if (selectedTeamId != null) configDd.value = String(selectedTeamId);
   const sel = teams.find((t) => t.id === selectedTeamId);
   playersTeamName.textContent = sel ? sel.name : '—';
-  // kiosk active-team dropdown
-  const dd = document.getElementById('active-team-select');
-  dd.textContent = '';
-  for (const t of teams) {
-    const opt = document.createElement('option');
-    opt.value = t.id;
-    opt.textContent = t.name;
-    dd.appendChild(opt);
-  }
-  if (activeTeamId != null) dd.value = String(activeTeamId);
 }
+
+document.getElementById('config-team-select').addEventListener('change', async (e) => {
+  selectedTeamId = Number(e.target.value);
+  openPlayerId = null;
+  renderTeams();
+  await loadPlayers();
+});
 
 document.getElementById('active-team-select').addEventListener('change', async (e) => {
   const id = Number(e.target.value);
