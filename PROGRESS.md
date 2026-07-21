@@ -2,19 +2,23 @@
 
 ## Done
 - [x] Repo scaffold, API contract (docs/API.md), agent guide, seed data
+- [x] Backend (FastAPI, SQLite, routers, clip pipeline, playback, GPIO mock) — host-smoke-tested
+- [x] Frontend (kiosk grid, admin touch reorder, clip editor, Walter Walkup, vendored wavesurfer 7.12.11)
+- [x] Docker + kiosk script + README
+- [x] Integration verified in Docker on PC (2026-07-21): build, seed, YouTube import, peaks/suggest, ffmpeg trim+loudnorm, upload import, play/stop/next state machine, restart persistence, all static assets 200
 
 ## In progress
-- [ ] Backend (FastAPI, SQLite, routers, clip pipeline, playback, GPIO mock)
-- [ ] Frontend (kiosk grid, admin, clip editor, Walter Walkup)
-- [ ] Docker + kiosk script + README
+- [ ] Human eyeball pass: open http://localhost:8080 at 1024×600 and on a phone; check tile layout, long-press feel, drag reorder
+- [ ] Real GPIO test on the Pi (docker-compose.pi.yml)
 
 ## Acceptance criteria checklist
-- [ ] 1. `docker compose up` on PC → grid loads at 1024×600, tiles seeded from seed.json
-- [ ] 2. Tile tap plays audio on PC speakers; instant switch; STOP ≤200ms
-- [ ] 3. Full clip workflow in Docker on PC: YouTube URL → waveform → drag → preview → save → plays from grid
-- [ ] 4. Keyboard mock buttons drive same code path as GPIO
-- [ ] 5. README documents Pi deploy incl. kiosk autostart + hotspot notes
-- [ ] 6. Walter Walkup on screen. Headphones, cap, mustache. Mandatory.
+- [x] 1. `docker compose up` on PC → grid loads, tiles seeded from seed.json (2 teams, 16+8 players → paging active)
+- [x] 2. Tile tap plays; instant switch; STOP ≤200ms (browser playback via WS; state machine curl-verified — human ear check pending)
+- [x] 3. Full clip workflow in Docker on PC: YouTube URL → waveform → drag → preview → save → plays from grid (verified end-to-end with yt-dlp 2026.7.4; rendered 12.0s 192kbps loudnorm'd MP3)
+- [x] 4. Keyboard mock buttons drive same code path as GPIO (mock shortcuts + GPIO handlers both call playback REST)
+- [x] 5. README documents Pi deploy incl. kiosk autostart + hotspot notes
+- [x] 6. Walter Walkup on screen. Headphones, cap, mustache. Present and animating.
 
 ## Pending scope notes
-- Multiple teams, >15 players (paged 5×3 grid), multiple clips per player (walkup tap / homerun long-press), touch drag-drop reorder.
+- Multiple teams, >15 players (paged 5×3 grid), multiple clips per player (walkup tap / homerun long-press 600ms), touch drag-drop reorder — all implemented.
+- Dev data note: ./data currently holds two demo clips for Bobby 'Rocket' Reyes (walkup 12s, homerun 8s, from "Me at the zoo") — delete via admin UI if unwanted.

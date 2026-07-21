@@ -28,4 +28,7 @@ Big league music for big league moments. Raspberry Pi–hosted walk-up song play
 
 _(append dated entries whenever something bites)_
 
-- (placeholder)
+- 2026-07-21: yt-dlp pins go stale fast — 2025.6.9 failed with "No video formats found" against current YouTube; bumped to 2026.7.4 and imports work. If imports break, check PyPI for a newer yt-dlp first.
+- 2026-07-21: Git Bash mangles container paths in `docker exec` (e.g. `/data/x` → `C:/Program Files/Git/data/x`). Prefix with `MSYS_NO_PATHCONV=1`.
+- 2026-07-21: `docker compose restart` has no `-q` flag (Docker Compose 2.29+); use plain `restart` and redirect output.
+- 2026-07-21: First-run smoke test needs a real clip — playback endpoints correctly 404 until a player has an active clip of the requested type.
