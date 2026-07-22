@@ -70,7 +70,8 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
   `{ "job_id", "status": "pending"|"processing"|"done"|"error", "detail": "",
      "duration_sec": 213.4, "suggested_start": 34.0, "suggested_end": 46.0,
      "source_audio_url": "/media/sources/abc.mp3", "peaks": [0.12, ...] }`
-  (`peaks`: ~800 floats 0–1 for instant waveform render; `suggested_*` = loudest default_snippet_length window, fallback 0→length)
+  (`peaks`: ~800 floats 0–1 for instant waveform render; `suggested_*` = loudest default_snippet_length window, fallback 0→length).
+  **Expiry:** a `job_id` lives ~1 hour after creation, then is evicted (its unsaved source file is deleted too). `GET /api/jobs/{expired}` → **404**; `POST /api/clips`|`/api/hype` with an expired/unknown id → **400** `unknown job_id`. Clients should stop polling on 404 and re-import. Import → trim → save takes seconds, so this only bites abandoned jobs.
 - `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type). Same trim validation as PATCH (`0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, fades ≥ 0) → 400 on violation, checked before anything is saved.
 - `GET /api/clips/{id}/edit_context` →
   `{ "clip": <clip object>, "source_audio_url": "/media/sources/abc.mp3", "duration_sec": 213.4, "peaks": [0.12, ...] }`
