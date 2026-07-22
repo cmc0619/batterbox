@@ -23,7 +23,10 @@ def list_clips(player_id: int):
 def import_youtube(body: YoutubeImport):
     if db.get_player(body.player_id) is None:
         raise HTTPException(404, f"player {body.player_id} not found")
-    job = clipper.start_youtube_job(body.player_id, body.type, body.url)
+    try:
+        job = clipper.start_youtube_job(body.player_id, body.type, body.url)
+    except clipper.JobError as e:
+        raise HTTPException(429, str(e)) from e
     return {"job_id": job["job_id"]}
 
 
@@ -43,7 +46,10 @@ async def import_upload(player_id: int, type: str, file: UploadFile = File(...))
         raise HTTPException(400, "file must be 50MB or smaller")
     if not data:
         raise HTTPException(400, "empty file")
-    job = clipper.start_upload_job(player_id, type, ext, data)
+    try:
+        job = clipper.start_upload_job(player_id, type, ext, data)
+    except clipper.JobError as e:
+        raise HTTPException(429, str(e)) from e
     return {"job_id": job["job_id"]}
 
 

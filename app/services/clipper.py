@@ -32,6 +32,16 @@ PCM_RATE = 8000  # mono s16le decode rate for analysis
 UPLOAD_EXTS = {".mp3", ".m4a"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
+# The upload cap bounds compressed bytes, not decoded ones — a low-bitrate
+# 50MB file can decode to hundreds of MB of PCM, enough to OOM a Pi. Cap the
+# source duration instead: 30 min decodes to ~29MB at the 8kHz mono analysis
+# rate. Nobody trims a walk-up song out of anything longer.
+MAX_SOURCE_DURATION_SEC = 30 * 60
+
+# In-flight import ceiling: the two-worker pool keeps the Pi responsive, but
+# an unbounded backlog of queued yt-dlp downloads can still fill the disk.
+MAX_ACTIVE_JOBS = 8
+
 # Jobs are only needed between import and POST /api/clips|/api/hype; anything
 # this old is abandoned (or stuck). Evicting just drops the dict entry — the
 # source file stays on disk for clips that already reference it.
@@ -81,6 +91,11 @@ def job_public(job: dict) -> dict:
 
 def _new_job(source: str, source_url: str | None) -> dict:
     _evict_stale_jobs()
+    active = sum(1 for j in _jobs.values() if j["status"] in ("pending", "processing"))
+    if active >= MAX_ACTIVE_JOBS:
+        raise JobError(
+            f"too many imports in progress ({active}) — wait for one to finish"
+        )
     job = {
         "job_id": uuid.uuid4().hex[:12],
         "status": "pending",
@@ -144,6 +159,11 @@ def _run_youtube(job: dict) -> None:
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
         "quiet": True,
         "no_warnings": True,
+        # A playlist URL would otherwise download every entry; one import =
+        # one video. Size/timeouts bound accidental monster downloads.
+        "noplaylist": True,
+        "max_filesize": MAX_UPLOAD_BYTES,
+        "socket_timeout": 30,
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -155,7 +175,10 @@ def _run_youtube(job: dict) -> None:
     path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ".mp3")
     if not os.path.exists(path):
         job["status"] = "error"
-        job["detail"] = "yt-dlp did not produce an mp3 (is ffmpeg installed?)"
+        job["detail"] = (
+            "yt-dlp did not produce an mp3 (source larger than the "
+            f"{MAX_UPLOAD_BYTES // (1024 * 1024)}MB limit, or ffmpeg missing)"
+        )
         return
     _analyze(job, path)
 
@@ -192,6 +215,19 @@ def _analyze(job: dict, path: str) -> None:
     snippet = float(db.get_setting("default_snippet_length", "30"))
     try:
         duration = _ffprobe_duration(path)
+        if duration > MAX_SOURCE_DURATION_SEC:
+            # Checked before the PCM decode: the decoded stream is what can
+            # OOM a Pi, not the compressed file. Drop the useless source.
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            job["status"] = "error"
+            job["detail"] = (
+                f"source is {duration / 60:.0f} min long — the limit is "
+                f"{MAX_SOURCE_DURATION_SEC // 60} min"
+            )
+            return
         job["duration_sec"] = round(duration, 3)
         samples = _decode_pcm(path)
         job["peaks"] = _peaks(samples)
@@ -306,6 +342,12 @@ def _edit_context(source_file: str | None, key: str, obj: dict) -> dict:
     path = _source_path(source_file)
     try:
         duration = _ffprobe_duration(path)
+        if duration > MAX_SOURCE_DURATION_SEC:
+            # Same OOM guard as import analysis (pre-cap sources may exist).
+            raise RenderError(
+                f"source is {duration / 60:.0f} min long — re-edit supports "
+                f"up to {MAX_SOURCE_DURATION_SEC // 60} min"
+            )
         peaks = _peaks(_decode_pcm(path))
     except FileNotFoundError as e:
         raise RenderError(

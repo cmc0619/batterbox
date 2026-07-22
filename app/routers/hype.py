@@ -27,7 +27,10 @@ def list_hype():
 @router.post("/api/hype/import/youtube", status_code=202)
 def import_youtube(body: HypeYoutubeImport):
     _validate_title(body.title)
-    job = clipper.start_hype_youtube_job(body.url)
+    try:
+        job = clipper.start_hype_youtube_job(body.url)
+    except clipper.JobError as e:
+        raise HTTPException(429, str(e)) from e
     return {"job_id": job["job_id"]}
 
 
@@ -44,7 +47,10 @@ async def import_upload(title: str, file: UploadFile = File(...)):
         raise HTTPException(400, "file must be 50MB or smaller")
     if not data:
         raise HTTPException(400, "empty file")
-    job = clipper.start_hype_upload_job(ext, data)
+    try:
+        job = clipper.start_hype_upload_job(ext, data)
+    except clipper.JobError as e:
+        raise HTTPException(429, str(e)) from e
     return {"job_id": job["job_id"]}
 
 
