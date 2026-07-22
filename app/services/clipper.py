@@ -23,6 +23,10 @@ log = logging.getLogger("batterbox.clipper")
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="clipper")
 _jobs: dict[str, dict] = {}
+# Guards the _jobs map itself (request threads create/read, worker threads
+# exist in evicted entries). Individual job dict field updates stay unlocked —
+# single writer per job.
+_jobs_lock = threading.Lock()
 
 PEAK_BUCKETS = 800
 PCM_RATE = 8000  # mono s16le decode rate for analysis
@@ -50,10 +54,24 @@ JOB_TTL_SEC = 60 * 60
 
 
 def _evict_stale_jobs() -> None:
+    """Drop abandoned jobs and their source files (when nothing references
+    them). Runs on every job create AND every job read, so eviction doesn't
+    depend on someone importing again later."""
     cutoff = time.monotonic() - JOB_TTL_SEC
-    stale = [jid for jid, j in _jobs.items() if j["created_mono"] < cutoff]
-    for jid in stale:
-        del _jobs[jid]
+    with _jobs_lock:
+        stale = [j for j in _jobs.values() if j["created_mono"] < cutoff]
+        for job in stale:
+            del _jobs[job["job_id"]]
+    for job in stale:
+        path = job.get("source_path")
+        if not path or not os.path.exists(path):
+            continue
+        if db.source_file_referenced(os.path.basename(path)):
+            continue  # a saved clip still re-edits from this source
+        try:
+            os.remove(path)
+        except OSError:
+            pass
     if stale:
         log.info("evicted %d stale import job(s)", len(stale))
 
@@ -74,7 +92,9 @@ class SourceMissingError(Exception):
 
 
 def get_job(job_id: str) -> dict | None:
-    return _jobs.get(job_id)
+    _evict_stale_jobs()
+    with _jobs_lock:
+        return _jobs.get(job_id)
 
 
 def job_public(job: dict) -> dict:
@@ -92,20 +112,23 @@ def job_public(job: dict) -> dict:
 
 def _new_job(source: str, source_url: str | None) -> dict:
     _evict_stale_jobs()
-    active = sum(1 for j in _jobs.values() if j["status"] in ("pending", "processing"))
-    if active >= MAX_ACTIVE_JOBS:
-        raise JobError(
-            f"too many imports in progress ({active}) — wait for one to finish"
+    with _jobs_lock:
+        active = sum(
+            1 for j in _jobs.values() if j["status"] in ("pending", "processing")
         )
-    job = {
-        "job_id": uuid.uuid4().hex[:12],
-        "status": "pending",
-        "detail": "",
-        "source": source,
-        "source_url": source_url,
-        "created_mono": time.monotonic(),
-    }
-    _jobs[job["job_id"]] = job
+        if active >= MAX_ACTIVE_JOBS:
+            raise JobError(
+                f"too many imports in progress ({active}) — wait for one to finish"
+            )
+        job = {
+            "job_id": uuid.uuid4().hex[:12],
+            "status": "pending",
+            "detail": "",
+            "source": source,
+            "source_url": source_url,
+            "created_mono": time.monotonic(),
+        }
+        _jobs[job["job_id"]] = job
     return job
 
 
@@ -527,7 +550,8 @@ def rerender_hype(
 
 
 def _done_job_source(job_id: str) -> tuple[dict, str]:
-    job = _jobs.get(job_id)
+    with _jobs_lock:
+        job = _jobs.get(job_id)
     if job is None:
         raise JobError("unknown job_id")
     if job["status"] != "done":
