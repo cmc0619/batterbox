@@ -163,7 +163,7 @@ All env vars, settable in `docker-compose.yml` / `.env` / shell:
 
 | Var             | Default   | What it does                                                            |
 | --------------- | --------- | ----------------------------------------------------------------------- |
-| `PORT`          | `8080`    | HTTP port                                                               |
+| `PORT`          | `8080`    | HTTP port inside the container (compose maps host ports onto it; the Pi override adds `80:8080` so phones browse with no port) |
 | `DATA_DIR`      | `/data`   | SQLite DB + clips/photos/sources (mounted to `./data` on the host)      |
 | `MOCK_GPIO`     | `true`    | `true` = keyboard/on-screen mock buttons; `false` = real GPIO (Pi)      |
 | `AUDIO_BACKEND` | `browser` | `browser` = clients play audio; `server` = mpv in-container to ALSA     |
