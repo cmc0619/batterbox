@@ -33,6 +33,14 @@ def stop_hotspot():
     return status
 
 
+@router.post("/client")
+def connect_client(body: WifiCredentials):
+    status, err = wifi.connect_client(body.ssid, body.password)
+    if err:
+        raise HTTPException(400, err)
+    return status
+
+
 @router.post("/settings")
 def save_settings(body: WifiCredentials):
     status, err = wifi.save_settings(body.ssid, body.password)

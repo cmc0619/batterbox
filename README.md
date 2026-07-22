@@ -104,7 +104,7 @@ Target: Raspberry Pi OS 64-bit (Bookworm or later), Pi 4 or 5 recommended.
 
 4. **Networking at the field** — two ways to get phones and the Pi on the same network:
 
-   **Option A — Pi joins your iPhone's hotspot (recommended; the Pi gets internet too).** Turn on the iPhone's Personal Hotspot (Settings → Personal Hotspot; also enable *Maximize Compatibility* — that keeps it on 2.4GHz, which the Pi's Wi-Fi prefers). Then, once, on the Pi:
+   **Option A — Pi joins an existing Wi-Fi network (client mode).** Either your iPhone's Personal Hotspot (gives the Pi internet as a side effect — YouTube imports and the yt-dlp auto-update keep working at the field) or any home/field Wi-Fi. Easiest: Admin → **Wi-Fi Hotspot** section → put the network's SSID + password in the box → **Use Wi-Fi** (blank password = open network). From the Pi console instead:
 
    ```bash
    sudo nmcli device wifi connect "Your iPhone Name" password "your-hotspot-password"
@@ -112,7 +112,7 @@ Target: Raspberry Pi OS 64-bit (Bookworm or later), Pi 4 or 5 recommended.
 
    The Pi remembers the network and rejoins automatically. Side effect: the Pi has real internet through the phone — YouTube imports and the yt-dlp auto-update keep working at the field.
 
-   **Option B — Pi runs its own hotspot (fully offline).** No internet anywhere; good when there's no cell signal — or when the phone plan charges for tethering. Everything is done from the admin UI: open Admin → **Wi-Fi Hotspot**, set the SSID and password (defaults: `BatterBox` / `bigleague1`), and tap **Start Hotspot**. The Pi leaves its current Wi-Fi and broadcasts the new network — join it from your phone and reopen http://batterbox.local (or http://10.42.0.1). **Stop Hotspot** turns it off; the Pi rejoins any remembered network on its own. You can also save the SSID/password ahead of time with **Save Settings** (works on the PC at home, where there's no Wi-Fi radio to control).
+   **Option B — Pi runs its own hotspot (fully offline).** No internet anywhere; good when there's no cell signal — or when the phone plan charges for tethering. Everything is done from the admin UI: open Admin → **Wi-Fi Hotspot**, set the SSID and password (defaults: `BatterBox` / `bigleague1`), and tap **Start Hotspot**. One credentials box, two directions: **Start Hotspot** *broadcasts* it, **Use Wi-Fi** *joins* it. The Pi leaves its current Wi-Fi and broadcasts the new network — join it from your phone and reopen http://batterbox.local (or http://10.42.0.1). **Stop Hotspot** turns it off; the Pi rejoins any remembered network on its own. You can also save the SSID/password ahead of time with **Save Settings** (works on the PC at home, where there's no Wi-Fi radio to control).
 
    Fallback if the admin UI can't reach the Pi at all, run once on the Pi itself:
 
