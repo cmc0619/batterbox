@@ -3,7 +3,7 @@
 This is the **binding contract** between backend and frontend. Both sides MUST implement exactly these endpoints, shapes, and behaviors. If a change is needed, update this file in the same commit.
 
 - Static frontend served at `/` (index.html, admin.html, edit.html).
-- Media files (clips, photos, sources, hype) served from `/media/...` mapped to the `DATA_DIR` volume (`/data` in container, `./data` on host).
+- Media files served from `/media/clips/`, `/media/photos/`, `/media/hype/`, `/media/sources/` — each mapped to the matching subdir of the `DATA_DIR` volume (`/data` in container, `./data` on host). Only these four subdirs are served; files at the volume root (the SQLite DB, mpv socket) are not reachable over HTTP.
 - All JSON. All IDs are integers. Times are float seconds. Volume is int 0–100.
 
 ## WebSocket — `/ws`
