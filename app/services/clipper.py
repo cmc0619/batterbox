@@ -236,6 +236,12 @@ def _decode_pcm(path: str) -> array:
 
 def _analyze(job: dict, path: str) -> None:
     job["status"] = "processing"
+    # Record the source path up front so eviction can reclaim the file even
+    # when analysis fails below. Previously this was only set in the success
+    # branch, so a failed analysis (corrupt/undecodable upload) left the
+    # source in sources/ with no source_path — _evict_stale_jobs skipped it
+    # (`if not path`) and it leaked forever.
+    job["source_path"] = path
     snippet = float(db.get_setting("default_snippet_length", "30"))
     try:
         duration = _ffprobe_duration(path)
@@ -261,8 +267,7 @@ def _analyze(job: dict, path: str) -> None:
         job["suggested_start"] = round(start, 1)
         job["suggested_end"] = round(min(start + snippet, duration), 1)
         job["source_audio_url"] = "/media/sources/" + os.path.basename(path)
-        job["source_path"] = path
-        job["status"] = "done"
+        job["status"] = "done"  # source_path already set at the top
     except FileNotFoundError as e:
         job["status"] = "error"
         job["detail"] = f"missing binary: {e.filename or e} (ffmpeg/ffprobe required)"
