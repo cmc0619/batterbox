@@ -325,6 +325,11 @@ def create_team(name: str) -> dict:
         ).fetchone()["n"]
         cur = conn.execute("INSERT INTO teams (name, sort_order) VALUES (?, ?)", (name, nxt))
         conn.commit()
+    # The only team should always be the active one — otherwise the kiosk
+    # renders a grid (frontend falls back to the first team) while next-batter
+    # 404s with "no active team".
+    if get_active_team_id() is None:
+        set_active_team_id(cur.lastrowid)
     return get_team(cur.lastrowid)
 
 
@@ -355,7 +360,20 @@ def delete_team(team_id: int) -> bool:
         ]
         cur = conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
         if get_active_team_id() == team_id:
-            conn.execute("DELETE FROM settings WHERE key = 'active_team_id'")
+            # Hand the active slot to the first remaining team instead of
+            # leaving it unset (kiosk would render a fallback team while
+            # next-batter fails with "no active team").
+            successor = conn.execute(
+                "SELECT id FROM teams ORDER BY sort_order, id LIMIT 1"
+            ).fetchone()
+            if successor:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES"
+                    " ('active_team_id', ?)",
+                    (str(successor["id"]),),
+                )
+            else:
+                conn.execute("DELETE FROM settings WHERE key = 'active_team_id'")
         conn.commit()
     if cur.rowcount:
         _remove_files(
