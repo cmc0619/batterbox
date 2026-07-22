@@ -169,7 +169,7 @@ function renderPlayers() {
 
 function buildPlayerRow(p) {
   const row = document.createElement('div');
-  row.className = 'player-row';
+  row.className = 'player-row' + (p.absent ? ' absent' : '');
   row.dataset.playerId = p.id;
 
   const handle = document.createElement('div');
@@ -190,6 +190,7 @@ function buildPlayerRow(p) {
   const bits = [`#${p.jersey_number ?? '?'}`];
   bits.push(p.active_walkup_clip_id ? 'walkup ✓' : 'walkup —');
   bits.push(p.active_homerun_clip_id ? 'homerun ✓' : 'homerun —');
+  if (p.absent) bits.push('ABSENT');
   sub.textContent = bits.join(' · ');
   info.appendChild(nm);
   info.appendChild(sub);
@@ -305,6 +306,22 @@ function buildDetail(p) {
   const jl = document.createElement('label'); jl.textContent = 'Jersey number';
   const ji = document.createElement('input'); ji.value = p.jersey_number ?? ''; ji.inputMode = 'numeric';
   det.append(nl, ni, jl, ji);
+
+  // absent toggle — hidden from the kiosk, stays in the roster. Saves instantly.
+  const absL = document.createElement('label');
+  absL.className = 'absent-toggle';
+  const absC = document.createElement('input');
+  absC.type = 'checkbox';
+  absC.checked = !!p.absent;
+  absC.addEventListener('change', async () => {
+    try {
+      await BB.api(`/api/players/${p.id}`, { method: 'PATCH', body: { absent: absC.checked } });
+      await loadPlayers();
+      showBanner(absC.checked ? `${p.name} marked absent — hidden from kiosk.` : `${p.name} is back on the kiosk.`, false);
+    } catch (err) { showBanner(err.message, false); }
+  });
+  absL.append(absC, document.createTextNode(' Absent (hidden from kiosk)'));
+  det.appendChild(absL);
 
   const row1 = document.createElement('div');
   row1.className = 'form-row';

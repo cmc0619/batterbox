@@ -543,6 +543,22 @@ body.admin, body.editor {
   font-weight: 900;
   flex: 0 0 auto;
 }
+.player-row.absent { opacity: 0.45; }
+.absent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 800;
+  min-height: 56px;
+  cursor: pointer;
+}
+.absent-toggle input[type="checkbox"] {
+  width: 30px;
+  height: 30px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .player-row .p-info { flex: 1 1 auto; min-width: 0; }
 .player-row .p-name { font-size: 24px; font-weight: 800; }
 .player-row .p-sub { font-size: 18px; color: var(--dim); }

@@ -33,9 +33,13 @@ Browser playback backend: on `play`, clients play `audio_url` via HTMLAudioEleme
 
 - `GET /api/teams/{team_id}/players` → ordered by `sort_order`:
   `[{ "id", "team_id", "name", "jersey_number", "photo_url" | null, "sort_order",
+      "absent": false,
       "active_walkup_clip_id" | null, "active_homerun_clip_id" | null }]`
+
+  `absent: true` hides the player from the kiosk grid and phone list and skips
+  them in next-batter, but they stay in the roster (admin always lists them).
 - `POST /api/teams/{team_id}/players` `{ "name", "jersey_number" }` → player
-- `PATCH /api/players/{id}` `{ "name"?, "jersey_number"? }` → player
+- `PATCH /api/players/{id}` `{ "name"?, "jersey_number"?, "absent"? }` → player
 - `DELETE /api/players/{id}` → 204 (cascades clips + files)
 - `POST /api/teams/{team_id}/players/reorder` `{ "player_ids": [..] }` → 204 (sets sort_order by array position)
 - `POST /api/players/{id}/photo` multipart `file` (jpg/png, ≤5MB) → `{ "photo_url" }`

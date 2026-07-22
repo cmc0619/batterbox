@@ -144,7 +144,8 @@ function markPlaying(playerId) {
 /* ---------------- data loading ---------------- */
 
 async function loadPlayers(teamId) {
-  players = await BB.api(`/api/teams/${teamId}/players`);
+  // absent players stay in the roster (admin) but never appear on the kiosk
+  players = (await BB.api(`/api/teams/${teamId}/players`)).filter((p) => !p.absent);
   page = 0;
   render();
 }
