@@ -139,7 +139,8 @@ function buildPlayerEl(player, kind) {
   el.appendChild(name);
   const num = document.createElement('div');
   num.className = 'jnum';
-  num.textContent = `#${player.jersey_number ?? '?'}`;
+  // No number entered -> empty (keeps the element for layout stability).
+  num.textContent = player.jersey_number != null ? `#${player.jersey_number}` : '';
   el.appendChild(num);
   if (playing && playing.type !== 'hype' && playing.player_id === player.id) {
     el.classList.add('playing');

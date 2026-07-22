@@ -11,8 +11,6 @@ from ..services import clipper
 
 router = APIRouter(tags=["hype"])
 
-UPLOAD_EXTS = {".mp3", ".m4a"}
-
 
 def _validate_title(title: str | None) -> str:
     t = (title or "").strip()
@@ -29,7 +27,10 @@ def list_hype():
 @router.post("/api/hype/import/youtube", status_code=202)
 def import_youtube(body: HypeYoutubeImport):
     _validate_title(body.title)
-    job = clipper.start_hype_youtube_job(body.url)
+    try:
+        job = clipper.start_hype_youtube_job(body.url)
+    except clipper.JobError as e:
+        raise HTTPException(429, str(e)) from e
     return {"job_id": job["job_id"]}
 
 
@@ -37,12 +38,19 @@ def import_youtube(body: HypeYoutubeImport):
 async def import_upload(title: str, file: UploadFile = File(...)):
     _validate_title(title)
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in UPLOAD_EXTS:
+    if ext not in clipper.UPLOAD_EXTS:
         raise HTTPException(400, "file must be mp3 or m4a")
-    data = await file.read()
+    # Bounded read: never pull more than the cap (+1 to detect overflow)
+    # into memory, whatever the client sends.
+    data = await file.read(clipper.MAX_UPLOAD_BYTES + 1)
+    if len(data) > clipper.MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "file must be 50MB or smaller")
     if not data:
         raise HTTPException(400, "empty file")
-    job = clipper.start_hype_upload_job(ext, data)
+    try:
+        job = clipper.start_hype_upload_job(ext, data)
+    except clipper.JobError as e:
+        raise HTTPException(429, str(e)) from e
     return {"job_id": job["job_id"]}
 
 

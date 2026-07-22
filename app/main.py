@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
@@ -24,6 +25,16 @@ log = logging.getLogger("batterbox")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    # Sweep render temp files orphaned by a crash mid-create/re-render.
+    for sub in ("clips", "hype"):
+        d = os.path.join(config.DATA_DIR, sub)
+        for name in os.listdir(d) if os.path.isdir(d) else []:
+            if ".tmp." in name and name.endswith(".mp3"):
+                try:
+                    os.remove(os.path.join(d, name))
+                    log.info("removed orphaned render temp %s/%s", sub, name)
+                except OSError:
+                    pass
     audio.ws_manager.loop = asyncio.get_running_loop()
     gpio.init_gpio()
     log.info(
@@ -47,6 +58,30 @@ app.add_middleware(
 )
 
 
+# A hair above the 50MB upload cap to allow multipart framing overhead. This
+# rejects an oversized declared body BEFORE Starlette parses the multipart and
+# spools it to a temp file — the per-handler file.read(cap+1) only bounds
+# memory after that. Chunked uploads (no Content-Length) skip this check and
+# rely on the handler cap; a real reverse proxy (nginx client_max_body_size /
+# Caddy request_body) is the belt-and-suspenders for those, but there's no
+# proxy in front of this appliance.
+MAX_REQUEST_BYTES = 55 * 1024 * 1024
+
+
+@app.middleware("http")
+async def body_size_limit_middleware(request, call_next):
+    cl = request.headers.get("content-length")
+    if cl is not None:
+        try:
+            if int(cl) > MAX_REQUEST_BYTES:
+                return JSONResponse(
+                    {"detail": "request body too large"}, status_code=413
+                )
+        except ValueError:
+            return JSONResponse({"detail": "invalid Content-Length"}, status_code=400)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def no_cache_middleware(request, call_next):
     """LAN kiosk app: always revalidate. A stale cached JS paired with new HTML
@@ -57,7 +92,9 @@ async def no_cache_middleware(request, call_next):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
-for sub in ("", "clips", "sources", "photos", "hype"):
+MEDIA_SUBDIRS = ("clips", "sources", "photos", "hype")
+
+for sub in ("",) + MEDIA_SUBDIRS:
     os.makedirs(os.path.join(config.DATA_DIR, sub), exist_ok=True)
 
 app.include_router(teams.router)
@@ -85,7 +122,15 @@ async def websocket_endpoint(websocket: WebSocket):
         audio.ws_manager.disconnect(websocket)
 
 
-app.mount("/media", StaticFiles(directory=config.DATA_DIR), name="media")
+# Mount each media subdir individually rather than DATA_DIR itself, so
+# non-media files at the volume root (batterbox.db, mpv.sock) are never
+# served over HTTP.
+for sub in MEDIA_SUBDIRS:
+    app.mount(
+        f"/media/{sub}",
+        StaticFiles(directory=os.path.join(config.DATA_DIR, sub)),
+        name=f"media-{sub}",
+    )
 
 # Static frontend is owned by another slice; mount only when present.
 _static_dir = Path(__file__).resolve().parent.parent / "static"

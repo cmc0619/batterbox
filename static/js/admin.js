@@ -187,7 +187,8 @@ function buildPlayerRow(p) {
   nm.textContent = p.name;
   const sub = document.createElement('div');
   sub.className = 'p-sub';
-  const bits = [`#${p.jersey_number ?? '?'}`];
+  // No number entered -> show nothing (not #0, not #?).
+  const bits = p.jersey_number != null ? [`#${p.jersey_number}`] : [];
   bits.push(p.active_walkup_clip_id ? 'walkup ✓' : 'walkup —');
   bits.push(p.active_homerun_clip_id ? 'homerun ✓' : 'homerun —');
   bits.push(p.active_walkout_clip_id ? 'walkout ✓' : 'walkout —');
@@ -243,6 +244,22 @@ function attachDrag(row, handle) {
         if (Math.abs(dy) < 8) return;
         dragging = true;
         row.classList.add('dragging');
+        // Collapse any open detail panel: the drag moves only .player-row
+        // elements, so an open panel would be left stranded under the wrong
+        // player after the reorder. Removed directly (NOT via renderPlayers,
+        // which would rebuild the list and destroy the row mid-drag).
+        const det = listEl.querySelector('.player-detail');
+        if (det) {
+          const owner = listEl.querySelector(
+            `.player-row[data-player-id="${det.dataset.forPlayer}"]`
+          );
+          det.remove();
+          openPlayerId = null;
+          if (owner) {
+            const b = owner.querySelector('.row-btns button');
+            if (b) b.textContent = 'Edit';  // was 'Close' while open
+          }
+        }
       }
       const visualTop = grabTop + dy;
       row.style.transform = `translateY(${visualTop - row.offsetTop}px)`;
@@ -563,7 +580,7 @@ document.getElementById('btn-add-player').addEventListener('click', async () => 
   try {
     await BB.api(`/api/teams/${selectedTeamId}/players`, {
       method: 'POST',
-      body: { name, jersey_number: jerseyOf(jerseyIn.value || '0') },
+      body: { name, jersey_number: jerseyOf(jerseyIn.value) },
     });
     nameIn.value = '';
     jerseyIn.value = '';

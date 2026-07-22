@@ -23,6 +23,7 @@ Big league music for big league moments. Raspberry Pi–hosted walk-up song play
 - GPIO handlers and mock keyboard shortcuts call the same playback REST endpoints — one code path.
 - UI rules: exactly 1024×600 kiosk layout, min ~18px text, huge touch targets, no hover-dependent interaction. Kiosk top bar has an O/D/H mode switch: O = offense (tap = walk-up clip, long-press 600ms = home-run clip), D = defense (players with an active walkout clip; tap = walkout, long-press = homerun), H = hype (crowd-stinger tiles, tap only). Volume is NOT on the top bar — it lives on the mock-GPIO bar (dev), physical GPIO buttons (Pi), and admin settings.
 - Commit + push autonomously after each verified slice. Keep this file and PROGRESS.md current in the same commits.
+- PRs: always create as **ready for review**, never draft — the repo's auto-reviewers (CodeRabbit, Greptile) skip draft PRs.
 
 ## Cursor Cloud specific instructions
 

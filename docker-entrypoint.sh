@@ -24,4 +24,6 @@ if [ "${YTDLP_AUTO_UPDATE:-true}" = "true" ]; then
     fi
 fi
 
-exec uvicorn app.main:app --host 0.0.0.0 --port 8080
+# PORT is the port INSIDE the container (compose maps host ports onto it:
+# 8080:8080 on PC, additionally 80:8080 on the Pi so phones need no port).
+exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8080}"

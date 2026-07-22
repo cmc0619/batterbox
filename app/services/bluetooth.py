@@ -157,9 +157,17 @@ def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | 
             {"available": False, "pairing": False, "detail": detail, "devices": []},
             detail,
         )
+    # Best-effort only: each _run is a one-shot bluetoothctl process, so the
+    # agent it registers dies with it (known limitation — a persistent agent
+    # needs a long-lived bluetoothctl session; untested without Pi hardware).
+    for args in (["agent", "on"], ["default-agent"]):
+        ok, out = _run(args)
+        if not ok:
+            log.warning("bluetoothctl %s failed: %s", " ".join(args), out)
+    # Adapter state commands are required: if the adapter never became
+    # discoverable/pairable, "pairing mode" would be a lie — fail the request
+    # instead of flashing a Pairing UI nothing can see.
     for args in (
-        ["agent", "on"],
-        ["default-agent"],
         ["pairable", "on"],
         # 0 = never auto-expire inside BlueZ; our own timer owns the window.
         ["discoverable-timeout", "0"],
@@ -167,7 +175,14 @@ def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | 
     ):
         ok, out = _run(args)
         if not ok:
-            log.warning("bluetoothctl %s failed: %s", " ".join(args), out)
+            err = f"bluetoothctl {' '.join(args)} failed: {out or 'no output'}"
+            log.warning(err)
+            # Leave the adapter as we found it (best-effort).
+            _run(["discoverable", "off"])
+            _run(["pairable", "off"])
+            status = get_status()
+            status["detail"] = err
+            return status, err
     global _expire_timer, _pairing
     with _lock:
         _pairing = True
