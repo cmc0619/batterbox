@@ -26,6 +26,12 @@ _jobs: dict[str, dict] = {}
 PEAK_BUCKETS = 800
 PCM_RATE = 8000  # mono s16le decode rate for analysis
 
+# What the import pipeline accepts as an uploaded source (shared by the
+# clips and hype routers). Sources are full songs/mixes people trim from;
+# 50MB ≈ 20+ min at 320kbps.
+UPLOAD_EXTS = {".mp3", ".m4a"}
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 # Jobs are only needed between import and POST /api/clips|/api/hype; anything
 # this old is abandoned (or stuck). Evicting just drops the dict entry — the
 # source file stays on disk for clips that already reference it.
@@ -321,27 +327,31 @@ def edit_context_hype(hype_id: int) -> dict:
     return _edit_context(db.get_hype_source_file(hype_id), "hype", db.get_hype(hype_id))
 
 
+def _probe_source(src: str) -> float:
+    """Source duration in seconds; RenderError if ffprobe is missing/fails."""
+    try:
+        return _ffprobe_duration(src)
+    except FileNotFoundError as e:
+        raise RenderError(
+            f"missing binary: {e.filename or e} (ffmpeg/ffprobe required)"
+        ) from None
+
+
 def _validate_trim(
-    src: str,
+    src_duration: float,
     trim_start_sec: float,
     trim_end_sec: float,
     fade_in_ms: int,
     fade_out_ms: int,
 ) -> float:
-    """Validate a trim against the source audio; returns the trimmed duration.
-    Raises JobError (client's fault → 400) or RenderError (source unreadable)."""
+    """Validate a trim against the source duration; returns the trimmed
+    duration. Raises JobError (client's fault → 400)."""
     if trim_start_sec < 0:
         raise JobError("trim_start_sec must be >= 0")
     if trim_end_sec <= trim_start_sec:
         raise JobError("trim_end_sec must be greater than trim_start_sec")
     if fade_in_ms < 0 or fade_out_ms < 0:
         raise JobError("fade_in_ms and fade_out_ms must be >= 0")
-    try:
-        src_duration = _ffprobe_duration(src)
-    except FileNotFoundError as e:
-        raise RenderError(
-            f"missing binary: {e.filename or e} (ffmpeg/ffprobe required)"
-        ) from None
     if trim_end_sec > src_duration:
         raise JobError(
             f"trim_end_sec exceeds source duration ({src_duration:.3f}s)"
@@ -357,12 +367,17 @@ def _render_to_file(
     trim_end_sec: float,
     fade_in_ms: int,
     fade_out_ms: int,
+    src_duration: float | None = None,
 ) -> float:
     """Validate the trim against the source duration, then render to
     DATA_DIR/<dst_dir>/<item_id>.mp3 via temp-file-then-move so a failed render
-    never leaves a half-written mp3. Returns the rendered duration."""
+    never leaves a half-written mp3. Returns the rendered duration.
+    Pass `src_duration` if the caller already probed the source (one ffprobe
+    per request, not two)."""
+    if src_duration is None:
+        src_duration = _probe_source(src)
     duration = _validate_trim(
-        src, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
     )
     dst = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.mp3")
     tmp = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.tmp.mp3")
@@ -448,8 +463,9 @@ def create_clip(
     job, src = _done_job_source(job_id)
     # Same validation as PATCH (incl. trim vs source duration) — fail fast
     # with a clean 400 before touching the DB, not a 500 out of ffmpeg.
+    src_duration = _probe_source(src)
     duration = _validate_trim(
-        src, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
     )
     is_first = db.count_clips(player_id, clip_type) == 0
     clip_id = db.insert_clip(
@@ -468,7 +484,8 @@ def create_clip(
     )
     try:
         _render_to_file(
-            src, "clips", clip_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+            src, "clips", clip_id, trim_start_sec, trim_end_sec,
+            fade_in_ms, fade_out_ms, src_duration=src_duration,
         )
     except Exception:
         db.delete_clip(clip_id)
@@ -489,8 +506,9 @@ def create_hype(
     title = title.strip()
     if not title or len(title) > 80:
         raise JobError("title must be 1–80 characters")
+    src_duration = _probe_source(src)
     duration = _validate_trim(
-        src, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
     )
     hype_id = db.insert_hype(
         title=title,
@@ -506,7 +524,8 @@ def create_hype(
     )
     try:
         _render_to_file(
-            src, "hype", hype_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+            src, "hype", hype_id, trim_start_sec, trim_end_sec,
+            fade_in_ms, fade_out_ms, src_duration=src_duration,
         )
     except Exception:
         db.delete_hype(hype_id)
