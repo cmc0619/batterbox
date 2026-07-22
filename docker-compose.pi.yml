@@ -7,9 +7,10 @@ services:
   app:
     ports:
       # On the Pi the app answers on plain http:// (port 80) so phones can
-      # open http://batterbox.local with no port number. 8080 stays mapped
-      # from the base file as well (handy for dev).
-      - "80:8080"
+      # open http://batterbox.local with no port number. Container port
+      # follows PORT (docker-entrypoint.sh); ${PORT:-8080} mapping from the
+      # base file stays as well (handy for dev).
+      - "80:${PORT:-8080}"
     devices:
       # GPIO edge detection for the physical STOP / next-batter / volume
       # buttons wired to the Pi's header. /dev/gpiomem avoids running the
