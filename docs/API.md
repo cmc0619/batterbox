@@ -66,20 +66,22 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
 - `POST /api/clips/import/upload?player_id=1&type=walkup` multipart `file` (mp3/m4a, ≤50MB) → `{ "job_id" }` (async)
 
   Import limits (both endpoints, and the hype equivalents): sources longer than **30 minutes** fail analysis with a clear job error (decoded PCM of unbounded sources can exhaust Pi memory), and at most **8 imports** may be pending/processing at once — the 9th returns **429** with detail.
+
+  Body-size handling for all multipart uploads (audio import and player photo): a request whose `Content-Length` exceeds **55MB** is rejected with **413** by middleware before the body is parsed; within that, the per-endpoint caps still apply and return **400** (`file must be 50MB or smaller` for audio, `photo must be 5MB or smaller`). Chunked uploads without a `Content-Length` skip the 413 and are caught by the per-handler cap.
 - `GET /api/jobs/{job_id}` →
   `{ "job_id", "status": "pending"|"processing"|"done"|"error", "detail": "",
      "duration_sec": 213.4, "suggested_start": 34.0, "suggested_end": 46.0,
      "source_audio_url": "/media/sources/abc.mp3", "peaks": [0.12, ...] }`
   (`peaks`: ~800 floats 0–1 for instant waveform render; `suggested_*` = loudest default_snippet_length window, fallback 0→length).
-  **Expiry:** a `job_id` lives ~1 hour after creation, then is evicted (its unsaved source file is deleted too). `GET /api/jobs/{expired}` → **404**; `POST /api/clips`|`/api/hype` with an expired/unknown id → **400** `unknown job_id`. Clients should stop polling on 404 and re-import. Import → trim → save takes seconds, so this only bites abandoned jobs.
-- `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type). Same trim validation as PATCH (`0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, fades ≥ 0) → 400 on violation, checked before anything is saved.
+  **Expiry:** a `job_id` **may** be evicted ~1 hour after creation (its unsaved source file is reclaimed then). Eviction runs opportunistically on job creation and on `GET /api/jobs/{id}`, so the TTL is a lower bound, not a hard cutoff: once eviction fires, `GET /api/jobs/{expired}` → **404** and `POST /api/clips`|`/api/hype` with that id → **400** `unknown job_id`; but a job still in memory can be saved past the nominal hour (polling stops once a job is `done`, so nothing forces eviction in the meantime). Clients should stop polling on 404 and re-import. Import → trim → save takes seconds, so this only bites abandoned jobs.
+- `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type). Same trim validation as PATCH (`0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, fades ≥ 0) → 400 on violation, checked before anything is saved. Field bounds (rejected with **422**): `volume_boost_db` −24…+24 (the editor UI caps at ±12); all float fields reject NaN/Infinity.
 - `GET /api/clips/{id}/edit_context` →
   `{ "clip": <clip object>, "source_audio_url": "/media/sources/abc.mp3", "duration_sec": 213.4, "peaks": [0.12, ...] }`
   (re-opens a saved clip in the trim editor; `duration_sec`/`peaks` describe the FULL source audio, like the job response).
   404 if clip missing; **409** if the clip has no stored source file (saved before re-edit support) or the source file no longer exists on disk.
 - `PATCH /api/clips/{id}` `{ "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` (all required) → updated clip
   (re-renders from the clip's stored source with the same ffmpeg slice + fades + loudnorm → 192k MP3 pipeline; overwrites the clip's audio file via temp-file-then-move so a failed render never leaves a half-written mp3; updates `duration_sec`).
-  Validation: `0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, fades ≥ 0 → 400 on violation; 404 if clip missing; 409 on missing source (same as edit_context).
+  Validation: `0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, fades ≥ 0 → 400 on violation; `volume_boost_db` −24…+24 and no NaN/Infinity → **422** on violation; 404 if clip missing; 409 on missing source (same as edit_context). Note: a clip saved before these bounds existed with `|volume_boost_db| > 24` can no longer be PATCHed until the boost is brought into range (the editor UI already caps at ±12, so only hand-crafted requests hit this).
 - `POST /api/clips/{id}/activate` → clip (clears is_active on sibling clips of same player+type)
 - `DELETE /api/clips/{id}` → 204 (removes file; clears active flag)
 
@@ -147,7 +149,7 @@ Status object:
 ## Settings
 
 - `GET /api/settings` → `{ "default_snippet_length": 30, "master_volume": 80, "audio_output": "auto", "mock_gpio": true }`
-- `PATCH /api/settings` partial of the above → settings
+- `PATCH /api/settings` partial of the above → settings. Bounds: `default_snippet_length` 3–300 (seconds), `master_volume` 0–100; out-of-range or an explicit `null` for a numeric field → **422** (a null would otherwise poison later reads).
 
 ## GPIO / mock buttons
 
