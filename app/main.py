@@ -24,6 +24,16 @@ log = logging.getLogger("batterbox")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    # Sweep render temp files orphaned by a crash mid-create/re-render.
+    for sub in ("clips", "hype"):
+        d = os.path.join(config.DATA_DIR, sub)
+        for name in os.listdir(d) if os.path.isdir(d) else []:
+            if ".tmp." in name and name.endswith(".mp3"):
+                try:
+                    os.remove(os.path.join(d, name))
+                    log.info("removed orphaned render temp %s/%s", sub, name)
+                except OSError:
+                    pass
     audio.ws_manager.loop = asyncio.get_running_loop()
     gpio.init_gpio()
     log.info(

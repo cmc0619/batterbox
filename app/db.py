@@ -537,18 +537,9 @@ def get_active_clip(player_id: int, clip_type: str) -> dict | None:
     return _clip_to_dict(row) if row else None
 
 
-def count_clips(player_id: int, clip_type: str) -> int:
-    with _lock:
-        return get_conn().execute(
-            "SELECT COUNT(*) AS c FROM clips WHERE player_id = ? AND type = ?",
-            (player_id, clip_type),
-        ).fetchone()["c"]
-
-
 def insert_clip(
     player_id: int,
     clip_type: str,
-    is_active: bool,
     source: str,
     source_url: str | None,
     duration_sec: float,
@@ -561,6 +552,16 @@ def insert_clip(
 ) -> int:
     with _lock:
         conn = get_conn()
+        # First clip of a player+type becomes active. Decided inside the same
+        # lock as the insert so two concurrent first-saves can't both count
+        # zero and both insert as active.
+        is_active = (
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM clips WHERE player_id = ? AND type = ?",
+                (player_id, clip_type),
+            ).fetchone()["c"]
+            == 0
+        )
         cur = conn.execute(
             "INSERT INTO clips (player_id, type, is_active, source, source_url,"
             " duration_sec, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms,"
