@@ -1,6 +1,8 @@
 """Bluetooth speaker pairing endpoints (per docs/API.md). All work goes
 through services.bluetooth, which degrades to available=false when BlueZ
-is absent — only "unavailable" produces an HTTP error here."""
+is absent. HTTP errors (400) come from "unavailable" and from a pairing
+start that couldn't make the adapter discoverable/pairable; a failed
+connect to an available adapter rides back in status.detail (200)."""
 
 from fastapi import APIRouter, HTTPException
 
