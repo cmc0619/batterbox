@@ -3,7 +3,7 @@ services.audio, which also broadcasts over /ws."""
 
 from fastapi import APIRouter, HTTPException
 
-from ..models import PlayClipRequest, PlayRequest, VolumeSet
+from ..models import PlayClipRequest, PlayHypeRequest, PlayRequest, VolumeSet
 from ..services import audio
 
 router = APIRouter(prefix="/api/playback", tags=["playback"])
@@ -24,6 +24,14 @@ def play_clip(body: PlayClipRequest):
     state = audio.play_clip(body.clip_id)
     if state is None:
         raise HTTPException(404, f"clip {body.clip_id} not found")
+    return state
+
+
+@router.post("/play_hype")
+def play_hype(body: PlayHypeRequest):
+    state = audio.play_hype(body.hype_id)
+    if state is None:
+        raise HTTPException(404, f"hype clip {body.hype_id} not found")
     return state
 
 

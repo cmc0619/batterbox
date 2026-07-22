@@ -58,13 +58,11 @@ def job_public(job: dict) -> dict:
     }
 
 
-def _new_job(player_id: int, clip_type: str, source: str, source_url: str | None) -> dict:
+def _new_job(source: str, source_url: str | None) -> dict:
     job = {
         "job_id": uuid.uuid4().hex[:12],
         "status": "pending",
         "detail": "",
-        "player_id": player_id,
-        "type": clip_type,
         "source": source,
         "source_url": source_url,
     }
@@ -73,13 +71,31 @@ def _new_job(player_id: int, clip_type: str, source: str, source_url: str | None
 
 
 def start_youtube_job(player_id: int, clip_type: str, url: str) -> dict:
-    job = _new_job(player_id, clip_type, "youtube", url)
+    job = _new_job("youtube", url)
     _executor.submit(_run_youtube, job)
     return job
 
 
 def start_upload_job(player_id: int, clip_type: str, ext: str, data: bytes) -> dict:
-    job = _new_job(player_id, clip_type, "upload", None)
+    job = _new_job("upload", None)
+    path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ext)
+    with open(path, "wb") as f:
+        f.write(data)
+    _executor.submit(_analyze, job, path)
+    return job
+
+
+# Hype imports run through the exact same job pipeline; the title is collected
+# again at create time, so the job itself doesn't need to carry it.
+
+def start_hype_youtube_job(url: str) -> dict:
+    job = _new_job("youtube", url)
+    _executor.submit(_run_youtube, job)
+    return job
+
+
+def start_hype_upload_job(ext: str, data: bytes) -> dict:
+    job = _new_job("upload", None)
     path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ext)
     with open(path, "wb") as f:
         f.write(data)
@@ -249,8 +265,7 @@ def _render(
         raise RenderError(f"ffmpeg render failed: {proc.stderr.strip()[:500]}")
 
 
-def _source_path_for_clip(clip_id: int) -> str:
-    source_file = db.get_clip_source_file(clip_id)
+def _source_path(source_file: str | None) -> str:
     if not source_file:
         raise SourceMissingError(
             "clip has no stored source file (saved before re-edit support)"
@@ -263,9 +278,9 @@ def _source_path_for_clip(clip_id: int) -> str:
     return path
 
 
-def edit_context(clip_id: int) -> dict:
-    """Everything the editor needs to re-open a saved clip's trim."""
-    path = _source_path_for_clip(clip_id)
+def _edit_context(source_file: str | None, key: str, obj: dict) -> dict:
+    """Everything the editor needs to re-open a saved clip/hype trim."""
+    path = _source_path(source_file)
     try:
         duration = _ffprobe_duration(path)
         peaks = _peaks(_decode_pcm(path))
@@ -274,23 +289,33 @@ def edit_context(clip_id: int) -> dict:
             f"missing binary: {e.filename or e} (ffmpeg/ffprobe required)"
         ) from None
     return {
-        "clip": db.get_clip(clip_id),
+        key: obj,
         "source_audio_url": "/media/sources/" + os.path.basename(path),
         "duration_sec": round(duration, 3),
         "peaks": peaks,
     }
 
 
-def rerender_clip(
-    clip_id: int,
+def edit_context(clip_id: int) -> dict:
+    return _edit_context(db.get_clip_source_file(clip_id), "clip", db.get_clip(clip_id))
+
+
+def edit_context_hype(hype_id: int) -> dict:
+    return _edit_context(db.get_hype_source_file(hype_id), "hype", db.get_hype(hype_id))
+
+
+def _render_to_file(
+    src: str,
+    dst_dir: str,
+    item_id: int,
     trim_start_sec: float,
     trim_end_sec: float,
     fade_in_ms: int,
     fade_out_ms: int,
-    volume_boost_db: float,
-) -> dict:
-    """Re-render a saved clip from its stored source with new trim settings."""
-    src = _source_path_for_clip(clip_id)
+) -> float:
+    """Validate the trim against the source duration, then render to
+    DATA_DIR/<dst_dir>/<item_id>.mp3 via temp-file-then-move so a failed render
+    never leaves a half-written mp3. Returns the rendered duration."""
     if trim_start_sec < 0:
         raise JobError("trim_start_sec must be >= 0")
     if trim_end_sec <= trim_start_sec:
@@ -308,8 +333,8 @@ def rerender_clip(
             f"trim_end_sec exceeds source duration ({src_duration:.3f}s)"
         )
     duration = round(trim_end_sec - trim_start_sec, 3)
-    dst = os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3")
-    tmp = os.path.join(config.DATA_DIR, "clips", f"{clip_id}.tmp.mp3")
+    dst = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.mp3")
+    tmp = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.tmp.mp3")
     try:
         _render(src, tmp, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
         os.replace(tmp, dst)  # atomic-ish: never a half-written clip file
@@ -317,6 +342,22 @@ def rerender_clip(
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
+    return duration
+
+
+def rerender_clip(
+    clip_id: int,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+    volume_boost_db: float,
+) -> dict:
+    """Re-render a saved clip from its stored source with new trim settings."""
+    src = _source_path(db.get_clip_source_file(clip_id))
+    duration = _render_to_file(
+        src, "clips", clip_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+    )
     db.update_clip_trim(
         clip_id,
         duration_sec=duration,
@@ -329,6 +370,40 @@ def rerender_clip(
     return db.get_clip(clip_id)
 
 
+def rerender_hype(
+    hype_id: int,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+    volume_boost_db: float,
+) -> dict:
+    """Re-render a saved hype clip from its stored source with new trim."""
+    src = _source_path(db.get_hype_source_file(hype_id))
+    duration = _render_to_file(
+        src, "hype", hype_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+    )
+    db.update_hype_trim(
+        hype_id,
+        duration_sec=duration,
+        trim_start_sec=trim_start_sec,
+        trim_end_sec=trim_end_sec,
+        fade_in_ms=fade_in_ms,
+        fade_out_ms=fade_out_ms,
+        volume_boost_db=volume_boost_db,
+    )
+    return db.get_hype(hype_id)
+
+
+def _done_job_source(job_id: str) -> tuple[dict, str]:
+    job = _jobs.get(job_id)
+    if job is None:
+        raise JobError("unknown job_id")
+    if job["status"] != "done":
+        raise JobError(f"job is not done (status={job['status']}: {job.get('detail', '')})")
+    return job, job["source_path"]
+
+
 def create_clip(
     job_id: str,
     player_id: int,
@@ -339,14 +414,9 @@ def create_clip(
     fade_out_ms: int,
     volume_boost_db: float,
 ) -> dict:
-    job = _jobs.get(job_id)
-    if job is None:
-        raise JobError("unknown job_id")
-    if job["status"] != "done":
-        raise JobError(f"job is not done (status={job['status']}: {job.get('detail', '')})")
+    job, src = _done_job_source(job_id)
     if trim_end_sec <= trim_start_sec:
         raise JobError("trim_end_sec must be greater than trim_start_sec")
-    src = job["source_path"]
     duration = round(trim_end_sec - trim_start_sec, 3)
     is_first = db.count_clips(player_id, clip_type) == 0
     clip_id = db.insert_clip(
@@ -370,3 +440,40 @@ def create_clip(
         db.delete_clip(clip_id)
         raise
     return db.get_clip(clip_id)
+
+
+def create_hype(
+    job_id: str,
+    title: str,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+    volume_boost_db: float,
+) -> dict:
+    job, src = _done_job_source(job_id)
+    title = title.strip()
+    if not title or len(title) > 80:
+        raise JobError("title must be 1–80 characters")
+    if trim_end_sec <= trim_start_sec:
+        raise JobError("trim_end_sec must be greater than trim_start_sec")
+    duration = round(trim_end_sec - trim_start_sec, 3)
+    hype_id = db.insert_hype(
+        title=title,
+        source=job["source"],
+        source_url=job["source_url"],
+        duration_sec=duration,
+        trim_start_sec=trim_start_sec,
+        trim_end_sec=trim_end_sec,
+        fade_in_ms=fade_in_ms,
+        fade_out_ms=fade_out_ms,
+        volume_boost_db=volume_boost_db,
+        source_file=os.path.basename(src),
+    )
+    dst = os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3")
+    try:
+        _render(src, dst, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
+    except Exception:
+        db.delete_hype(hype_id)
+        raise
+    return db.get_hype(hype_id)

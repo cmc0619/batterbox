@@ -1,5 +1,7 @@
 /* BatterBox kiosk grid (index.html).
- * Tap = walk-up clip, long-press 600ms = home-run clip. Contract: docs/API.md.
+ * Modes: O = offense (tap walk-up, long-press 600ms home-run), D = defense
+ * (players with an active walk-out clip; tap walk-out, long-press home-run),
+ * H = hype (crowd stingers; tap to play, no long-press). Contract: docs/API.md.
  */
 import { BB } from './ws.js';
 
@@ -9,24 +11,26 @@ const LONG_PRESS_MS = 600;
 const gridEl = document.getElementById('grid');
 const phoneListEl = document.getElementById('phone-list');
 const teamNameEl = document.getElementById('team-name');
-const volLabel = document.getElementById('vol-label');
 const banner = document.getElementById('warn-banner');
 const walter = document.getElementById('walter');
 const pagePrev = document.getElementById('page-prev');
 const pageNext = document.getElementById('page-next');
 const pageIndicator = document.getElementById('page-indicator');
-const pitchersBtn = document.getElementById('btn-pitchers');
+const modeBtns = {
+  o: document.getElementById('mode-o'),
+  d: document.getElementById('mode-d'),
+  h: document.getElementById('mode-h'),
+};
 
 let players = [];
+let hypeClips = [];
 let page = 0;
-let playingPlayerId = null;
+let mode = 'o'; // 'o' offense | 'd' defense | 'h' hype — client-side only
+let playing = null; // { type, player_id, clip_id } of the current play, or null
 let bannerTimer = null;
-// Pitching mode (PITCHERS toggle): grid/phone list show only players with an
-// active walkout clip; tap plays the walkout song. Client-side only.
-let pitchingMode = false;
 
 function visiblePlayers() {
-  return pitchingMode
+  return mode === 'd'
     ? players.filter((p) => p.active_walkout_clip_id != null)
     : players;
 }
@@ -63,6 +67,12 @@ function jerseyPlaceholder(player) {
   d.textContent = player.jersey_number ?? '?';
   return d;
 }
+function hypeAvatar() {
+  const d = document.createElement('div');
+  d.className = 'hype-ph';
+  d.textContent = '♪';
+  return d;
+}
 
 /* ---------------- tap / long-press ---------------- */
 
@@ -92,7 +102,23 @@ function attachPressHandlers(el, player) {
     clear();
     longFired = false;
     if (wasLong) return; // suppress tap after long-press
-    BB.playback.play(player.id, pitchingMode ? 'walkout' : 'walkup')
+    BB.playback.play(player.id, mode === 'd' ? 'walkout' : 'walkup')
+      .catch((err) => showBanner(err.message, false));
+  });
+  el.addEventListener('pointercancel', clear);
+  el.addEventListener('pointerleave', clear);
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+function attachHypePressHandlers(el, hype) {
+  const clear = () => el.classList.remove('pressed');
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    el.classList.add('pressed'); // immediate visual feedback
+  });
+  el.addEventListener('pointerup', () => {
+    clear();
+    BB.playback.playHype(hype.id)
       .catch((err) => showBanner(err.message, false));
   });
   el.addEventListener('pointercancel', clear);
@@ -115,19 +141,40 @@ function buildPlayerEl(player, kind) {
   num.className = 'jnum';
   num.textContent = `#${player.jersey_number ?? '?'}`;
   el.appendChild(num);
-  if (player.id === playingPlayerId) el.classList.add('playing');
+  if (playing && playing.type !== 'hype' && playing.player_id === player.id) {
+    el.classList.add('playing');
+  }
   attachPressHandlers(el, player);
   return el;
 }
 
+function buildHypeEl(hype, kind) {
+  const el = document.createElement('div');
+  el.className = kind; // 'tile' or 'prow'
+  el.dataset.hypeId = hype.id;
+  el.appendChild(hypeAvatar());
+  const name = document.createElement('div');
+  name.className = 'pname';
+  name.textContent = hype.title;
+  el.appendChild(name);
+  if (playing && playing.type === 'hype' && playing.clip_id === hype.id) {
+    el.classList.add('playing');
+  }
+  attachHypePressHandlers(el, hype);
+  return el;
+}
+
 function render() {
-  const list = visiblePlayers();
+  const hypeMode = mode === 'h';
+  const list = hypeMode ? hypeClips : visiblePlayers();
   const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
   page = Math.min(page, totalPages - 1);
   const slice = list.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
   gridEl.textContent = '';
-  for (const p of slice) gridEl.appendChild(buildPlayerEl(p, 'tile'));
+  for (const item of slice) {
+    gridEl.appendChild(hypeMode ? buildHypeEl(item, 'tile') : buildPlayerEl(item, 'tile'));
+  }
   for (let i = slice.length; i < PAGE_SIZE; i++) {
     const filler = document.createElement('div');
     filler.className = 'tile empty';
@@ -135,7 +182,9 @@ function render() {
   }
 
   phoneListEl.textContent = '';
-  for (const p of list) phoneListEl.appendChild(buildPlayerEl(p, 'prow'));
+  for (const item of list) {
+    phoneListEl.appendChild(hypeMode ? buildHypeEl(item, 'prow') : buildPlayerEl(item, 'prow'));
+  }
 
   const paged = list.length > PAGE_SIZE;
   pagePrev.hidden = !paged;
@@ -144,12 +193,23 @@ function render() {
   pageIndicator.textContent = `${page + 1} / ${totalPages}`;
 }
 
-function markPlaying(playerId) {
-  playingPlayerId = playerId;
+function markPlaying(state) {
+  // state: { type, player_id, clip_id } or null. Player tiles key off
+  // player_id; hype tiles key off clip_id (hype plays carry player_id null).
+  playing = state;
   for (const el of document.querySelectorAll('[data-player-id]')) {
-    el.classList.toggle('playing', Number(el.dataset.playerId) === playerId);
+    el.classList.toggle(
+      'playing',
+      !!state && state.type !== 'hype' && Number(el.dataset.playerId) === state.player_id
+    );
   }
-  walter.classList.toggle('playing', playerId != null);
+  for (const el of document.querySelectorAll('[data-hype-id]')) {
+    el.classList.toggle(
+      'playing',
+      !!state && state.type === 'hype' && Number(el.dataset.hypeId) === state.clip_id
+    );
+  }
+  walter.classList.toggle('playing', !!state); // dances for any playing status
 }
 
 /* ---------------- data loading ---------------- */
@@ -158,6 +218,11 @@ async function loadPlayers(teamId) {
   // absent players stay in the roster (admin) but never appear on the kiosk
   players = (await BB.api(`/api/teams/${teamId}/players`)).filter((p) => !p.absent);
   page = 0;
+  render();
+}
+
+async function loadHype() {
+  hypeClips = await BB.api('/api/hype');
   render();
 }
 
@@ -185,35 +250,49 @@ async function loadTeams() {
 document.getElementById('btn-stop').addEventListener('click', () => {
   BB.playback.stop().catch((err) => showBanner(err.message, false));
 });
-document.getElementById('vol-up').addEventListener('click', () => {
-  BB.playback.changeVolume(5).catch((err) => showBanner(err.message, false));
-});
-document.getElementById('vol-down').addEventListener('click', () => {
-  BB.playback.changeVolume(-5).catch((err) => showBanner(err.message, false));
-});
 pagePrev.addEventListener('click', () => { page = Math.max(0, page - 1); render(); });
 pageNext.addEventListener('click', () => {
-  page = Math.min(Math.ceil(visiblePlayers().length / PAGE_SIZE) - 1, page + 1);
+  const len = mode === 'h' ? hypeClips.length : visiblePlayers().length;
+  page = Math.min(Math.ceil(len / PAGE_SIZE) - 1, page + 1);
   render();
 });
-pitchersBtn.addEventListener('click', () => {
-  pitchingMode = !pitchingMode;
-  pitchersBtn.classList.toggle('on', pitchingMode);
-  pitchersBtn.setAttribute('aria-pressed', String(pitchingMode));
+
+async function setMode(next) {
+  if (next === mode) return;
+  mode = next;
+  for (const [m, btn] of Object.entries(modeBtns)) {
+    btn.classList.toggle('on', m === mode);
+    btn.setAttribute('aria-pressed', String(m === mode));
+  }
   page = 0;
-  render();
-});
+  if (mode === 'h') {
+    try {
+      await loadHype(); // refetch so admin edits show up
+    } catch (err) {
+      showBanner(`Failed to load hype clips: ${err.message}`, false);
+      render();
+    }
+  } else {
+    render();
+  }
+}
+modeBtns.o.addEventListener('click', () => setMode('o'));
+modeBtns.d.addEventListener('click', () => setMode('d'));
+modeBtns.h.addEventListener('click', () => setMode('h'));
 
 /* ---------------- WebSocket wiring ---------------- */
 
-BB.on('play', (msg) => { markPlaying(msg.player_id); hideBanner(); });
+BB.on('play', (msg) => {
+  markPlaying({ type: msg.type, player_id: msg.player_id, clip_id: msg.clip_id });
+  hideBanner();
+});
 BB.on('stop', () => markPlaying(null));
 BB.on('state', (msg) => {
-  volLabel.textContent = msg.volume ?? BB.getVolume();
-  markPlaying(msg.status === 'playing' ? msg.player_id : null);
+  markPlaying(msg.status === 'playing'
+    ? { type: msg.type, player_id: msg.player_id, clip_id: msg.clip_id }
+    : null);
   if (msg.audio_warning) showBanner(msg.audio_warning);
 });
-BB.on('volume', (msg) => { volLabel.textContent = msg.volume; });
 BB.on('warning', (msg) => showBanner(msg.message));
 
 /* ---------------- boot ---------------- */
@@ -221,7 +300,6 @@ BB.on('warning', (msg) => showBanner(msg.message));
 (async () => {
   BB.connect();
   BB.initMockGPIO(document.getElementById('mock-gpio'));
-  volLabel.textContent = BB.getVolume();
   try {
     await loadTeams();
   } catch (err) {

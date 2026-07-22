@@ -483,6 +483,75 @@ function buildClipRow(p, c) {
   return row;
 }
 
+/* ---------------- hype clips ---------------- */
+
+const hypeListEl = document.getElementById('hype-list');
+
+async function loadHype() {
+  let clips;
+  try {
+    clips = await BB.api('/api/hype');
+  } catch (err) {
+    hypeListEl.textContent = `Failed to load hype clips: ${err.message}`;
+    return;
+  }
+  hypeListEl.textContent = '';
+  if (clips.length === 0) {
+    const none = document.createElement('div');
+    none.style.color = 'var(--dim)';
+    none.style.marginBottom = '8px';
+    none.textContent = 'No hype clips yet.';
+    hypeListEl.appendChild(none);
+  }
+  for (const c of clips) hypeListEl.appendChild(buildHypeRow(c));
+}
+
+function buildHypeRow(c) {
+  const row = document.createElement('div');
+  row.className = 'clip-row';
+
+  const info = document.createElement('div');
+  info.className = 'c-info';
+  info.textContent = `${c.title} — ${fmtDur(c.duration_sec)} · trim ${c.trim_start_sec.toFixed(1)}–${c.trim_end_sec.toFixed(1)}s · ${c.source || 'upload'}`;
+  row.appendChild(info);
+
+  const playB = document.createElement('button');
+  playB.type = 'button';
+  playB.textContent = '▶ Test';
+  playB.addEventListener('click', () => {
+    BB.playback.playHype(c.id).catch((err) => showBanner(err.message, false));
+  });
+  row.appendChild(playB);
+
+  const editB = document.createElement('button');
+  editB.type = 'button';
+  editB.textContent = 'Edit';
+  editB.title = 'Re-open trim editor';
+  editB.addEventListener('click', () => {
+    location.href = `edit.html?hype_clip_id=${c.id}`;
+  });
+  row.appendChild(editB);
+
+  const delB = document.createElement('button');
+  delB.type = 'button';
+  delB.className = 'btn-danger';
+  delB.textContent = 'Delete';
+  delB.addEventListener('click', async () => {
+    if (!confirm(`Delete hype clip "${c.title}"?`)) return;
+    try {
+      await BB.api(`/api/hype/${c.id}`, { method: 'DELETE' });
+      await loadHype();
+    } catch (err) { showBanner(err.message, false); }
+  });
+  row.appendChild(delB);
+
+  return row;
+}
+
+document.getElementById('btn-add-hype').addEventListener('click', () => {
+  location.href = 'edit.html?hype=1';
+});
+
 /* ---------------- add player ---------------- */
 
 document.getElementById('btn-add-player').addEventListener('click', async () => {
@@ -649,6 +718,7 @@ BB.on('warning', (msg) => showBanner(msg.message, false));
   try {
     await loadTeams();
     await loadPlayers();
+    await loadHype();
   } catch (err) {
     showBanner(`Failed to load: ${err.message}`);
   }

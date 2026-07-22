@@ -68,6 +68,25 @@ class PlayClipRequest(BaseModel):
     clip_id: int
 
 
+class PlayHypeRequest(BaseModel):
+    hype_id: int
+
+
+class HypeYoutubeImport(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+    url: str
+
+
+class HypeCreate(BaseModel):
+    job_id: str
+    title: str = Field(min_length=1, max_length=80)
+    trim_start_sec: float
+    trim_end_sec: float
+    fade_in_ms: int = 0
+    fade_out_ms: int = 0
+    volume_boost_db: float = 0.0
+
+
 class VolumeSet(BaseModel):
     volume: int = Field(ge=0, le=100)
 

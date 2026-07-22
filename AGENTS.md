@@ -11,7 +11,7 @@ Big league music for big league moments. Raspberry Pi–hosted walk-up song play
 
 ## Architecture
 
-- `app/` — FastAPI backend. `routers/` = REST per `docs/API.md`, `services/` = audio playback, clip pipeline (yt-dlp/ffmpeg), GPIO, Bluetooth pairing (`bluetooth.py` — drives host BlueZ via `bluetoothctl` over the D-Bus socket mounted by docker-compose.pi.yml; degrades to available=false off-Pi), Wi-Fi hotspot (`wifi.py` — drives host NetworkManager via `nmcli` over the same D-Bus socket; hotspot profile con-name `batterbox`; degrades to available=false off-Pi).
+- `app/` — FastAPI backend. `routers/` = REST per `docs/API.md`, `services/` = audio playback, clip pipeline (yt-dlp/ffmpeg; shared by player clips and hype clips), GPIO, Bluetooth pairing (`bluetooth.py` — drives host BlueZ via `bluetoothctl` over the D-Bus socket mounted by docker-compose.pi.yml; degrades to available=false off-Pi), Wi-Fi hotspot (`wifi.py` — drives host NetworkManager via `nmcli` over the same D-Bus socket; hotspot profile con-name `batterbox`; degrades to available=false off-Pi). Hype clips (crowd stingers, not tied to a player) have their own `hype` table + `DATA_DIR/hype/<id>.mp3` files but reuse the player-clip import/render pipeline.
 - `static/` — no-build JS SPA: `index.html` (kiosk 1024×600 + phone responsive), `admin.html` (roster/teams/clips, touch drag-drop reorder), `edit.html` (wavesurfer trim editor). wavesurfer is **vendored** in `static/vendor/` — never CDN at runtime (field has no internet).
 - `data/` — SQLite DB + clips/photos/sources. Mounted volume; never commit contents.
 - `docs/API.md` — binding backend↔frontend contract. Change it in the same commit as any API change.
@@ -21,7 +21,7 @@ Big league music for big league moments. Raspberry Pi–hosted walk-up song play
 
 - Playback state lives ONLY on the server; clients receive it via WebSocket (`/ws`). Default playback backend is `browser` (HTMLAudioElement) because Docker on PC can't reach host speakers; `AUDIO_BACKEND=server` uses mpv inside the container (Pi option).
 - GPIO handlers and mock keyboard shortcuts call the same playback REST endpoints — one code path.
-- UI rules: exactly 1024×600 kiosk layout, min ~18px text, huge touch targets, no hover-dependent interaction. Tap = walk-up clip, long-press 600ms = home-run clip.
+- UI rules: exactly 1024×600 kiosk layout, min ~18px text, huge touch targets, no hover-dependent interaction. Kiosk top bar has an O/D/H mode switch: O = offense (tap = walk-up clip, long-press 600ms = home-run clip), D = defense (players with an active walkout clip; tap = walkout, long-press = homerun), H = hype (crowd-stinger tiles, tap only). Volume is NOT on the top bar — it lives on the mock-GPIO bar (dev), physical GPIO buttons (Pi), and admin settings.
 - Commit + push autonomously after each verified slice. Keep this file and PROGRESS.md current in the same commits.
 
 ## Lessons learned

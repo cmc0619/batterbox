@@ -105,13 +105,13 @@ def _mpv_command(payload: dict) -> None:
         log.warning("mpv IPC failed: %s", e)
 
 
-def _server_play(clip: dict) -> None:
+def _server_play(clip: dict, subdir: str = "clips") -> None:
     """Play a clip through mpv inside the container (Pi option)."""
     global _mpv_proc, _mpv_ipc
     if shutil.which("mpv") is None:
         _warn("mpv not found; AUDIO_BACKEND=server requires mpv in the container")
         return
-    audio_path = os.path.join(config.DATA_DIR, "clips", f"{clip['id']}.mp3")
+    audio_path = os.path.join(config.DATA_DIR, subdir, f"{clip['id']}.mp3")
     if not os.path.exists(audio_path):
         _warn(f"clip file missing: {audio_path}")
         return
@@ -205,6 +205,36 @@ def play_clip(clip_id: int) -> dict | None:
     if clip is None:
         return None
     return _play_clip_row(clip)
+
+
+def play_hype(hype_id: int) -> dict | None:
+    """Play a hype clip (crowd stinger; not tied to any player)."""
+    hype = db.get_hype(hype_id)
+    if hype is None:
+        return None
+    stop()  # playing always stops the current clip first
+    with _lock:
+        _state.update(
+            status="playing",
+            clip_id=hype["id"],
+            player_id=None,
+            type="hype",
+            audio_warning=None,
+        )
+    if config.AUDIO_BACKEND == "server":
+        _server_play(hype, subdir="hype")
+    ws_manager.broadcast(
+        {
+            "event": "play",
+            "clip_id": hype["id"],
+            "player_id": None,
+            "type": "hype",
+            "audio_url": hype["audio_url"],
+            "volume": int(db.get_setting("master_volume", "80")),
+            "volume_boost_db": hype["volume_boost_db"] or 0.0,
+        }
+    )
+    return get_state()
 
 
 def set_volume(volume: int) -> dict:
