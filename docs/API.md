@@ -149,7 +149,7 @@ Status object:
 ## Settings
 
 - `GET /api/settings` → `{ "default_snippet_length": 30, "master_volume": 80, "audio_output": "auto", "mock_gpio": true }`
-- `PATCH /api/settings` partial of the above → settings. Bounds: `default_snippet_length` 3–300 (seconds), `master_volume` 0–100; out-of-range or an explicit `null` for a numeric field → **422** (a null would otherwise poison later reads).
+- `PATCH /api/settings` partial of the above → settings. Bounds: `default_snippet_length` 3–300 (seconds), `master_volume` 0–100; an out-of-range integer → **422**. An explicit `null` for a numeric field is silently ignored (200, the setting keeps its current value) — it is never stored, because a null would serialise as the string `"None"` and break later reads.
 
 ## GPIO / mock buttons
 
