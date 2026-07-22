@@ -66,6 +66,10 @@ _state = {
     "clip_id": None,
     "player_id": None,
     "type": None,
+    # Monotonic per-play token. Browser clients echo it back with the stop
+    # they post on `ended`, so a stale end-of-song from the PREVIOUS clip
+    # (slow phone, delayed request) can't kill the one playing now.
+    "play_id": 0,
     "audio_warning": None,
 }
 
@@ -196,9 +200,18 @@ def _halt() -> None:
     ws_manager.broadcast({"event": "stop"})
 
 
-def stop() -> dict:
-    """Halt playback immediately and broadcast a stop event."""
+def stop(play_id: int | None = None) -> dict:
+    """Halt playback immediately and broadcast a stop event.
+
+    With `play_id` (browser `ended` reports), the stop only applies while
+    that same play is still current — a stale end-of-song can't stop the
+    next clip. Manual stops (STOP button, GPIO) pass None: always stop."""
     with _op_lock:
+        if play_id is not None:
+            with _lock:
+                stale = _state["status"] != "playing" or _state["play_id"] != play_id
+            if stale:
+                return get_state()
         _halt()
     return get_state()
 
@@ -219,11 +232,13 @@ def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
                 # happening — a stuck "playing" state never clears itself.
                 return get_state()
         with _lock:
+            play_id = _state["play_id"] + 1
             _state.update(
                 status="playing",
                 clip_id=row["id"],
                 player_id=player_id,
                 type=ctype,
+                play_id=play_id,
                 audio_warning=None,
             )
         ws_manager.broadcast(
@@ -232,6 +247,7 @@ def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
                 "clip_id": row["id"],
                 "player_id": player_id,
                 "type": ctype,
+                "play_id": play_id,
                 "audio_url": row["audio_url"],
                 "volume": int(db.get_setting("master_volume", "80")),
                 "volume_boost_db": row["volume_boost_db"] or 0.0,

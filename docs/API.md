@@ -11,13 +11,15 @@ This is the **binding contract** between backend and frontend. Both sides MUST i
 Server → client JSON messages. Clients never send.
 
 ```json
-{ "event": "play",    "clip_id": 3, "player_id": 7, "type": "walkup", "audio_url": "/media/clips/3.mp3", "volume": 80, "volume_boost_db": 0.0 }
-{ "event": "play",    "clip_id": 2, "player_id": null, "type": "hype", "audio_url": "/media/hype/2.mp3", "volume": 80, "volume_boost_db": 0.0 }
+{ "event": "play",    "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 12, "audio_url": "/media/clips/3.mp3", "volume": 80, "volume_boost_db": 0.0 }
+{ "event": "play",    "clip_id": 2, "player_id": null, "type": "hype", "play_id": 13, "audio_url": "/media/hype/2.mp3", "volume": 80, "volume_boost_db": 0.0 }
 { "event": "stop" }
 { "event": "volume",  "volume": 65 }
 { "event": "warning", "message": "No audio output device found" }
-{ "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "volume": 80 }
+{ "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "play_id": 13, "volume": 80 }
 ```
+
+`play_id` is a monotonic per-play token. Clients that report natural end-of-song echo it back (see `POST /api/playback/stop`) so a delayed `ended` from a previous clip can't stop the current one.
 
 `type` is `walkup`|`homerun`|`walkout` for player clips, or `hype` for hype clips — a hype play has `player_id: null` and `clip_id` = the hype clip id. The `state` message carries the same `type` semantics.
 
@@ -105,10 +107,10 @@ Hype clip object:
 - `POST /api/playback/play` `{ "player_id", "type" }` → state (plays active clip of that type — `walkup`|`homerun`|`walkout`; 404 if none; stops current first)
 - `POST /api/playback/play_clip` `{ "clip_id" }` → state
 - `POST /api/playback/play_hype` `{ "hype_id" }` → state (404 if the hype clip doesn't exist; stops current first, then broadcasts WS `play` with `type: "hype"`, `player_id: null`, `clip_id` = hype id, `audio_url`, `volume`, `volume_boost_db`). `GET /api/playback/state` and the WS `state` message report `type: "hype"` while a hype clip is playing.
-- `POST /api/playback/stop` → state (halt ≤200ms)
+- `POST /api/playback/stop` (body optional: `{ "play_id"? }`) → state (halt ≤200ms). Without a body (STOP button, GPIO): always stops. With `play_id` (the browser `ended` reporter): stops only if that play is still the current one — otherwise a no-op returning current state.
 - `POST /api/playback/volume` `{ "volume": 0-100 }` → state (persisted to settings)
 - `POST /api/playback/next` → state (next player in active team's batting order — wraps around — with an active walkup clip; plays it)
-- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "volume", "audio_warning": null|"..." }` (`type` is a clip type or `"hype"`)
+- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "play_id", "volume", "audio_warning": null|"..." }` (`type` is a clip type or `"hype"`)
 
 ## Bluetooth speaker pairing
 
