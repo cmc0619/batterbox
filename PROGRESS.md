@@ -10,6 +10,8 @@
 ## In progress
 - [ ] Human eyeball pass: open http://localhost:8080 at 1024×600 and on a phone; check tile layout, long-press feel, drag reorder
 - [ ] Real GPIO test on the Pi (docker-compose.pi.yml)
+- [ ] Issue #5 — suspected: Bluetooth pairing auto-accept agent doesn't persist (one-shot bluetoothctl); needs Pi + speaker to confirm and fix (persistent bluetoothctl session)
+- [ ] Issue #6 — suspected: Wi-Fi real-radio divergences (rollback paths verified against an nmcli stub only); one-sitting Pi verification checklist in the issue
 
 ## Done (continued)
 - [x] Clip re-edit: saved clips reopen in the editor (admin "Edit" button → edit.html?clip_id=N) with original source audio + saved trim region; PATCH /api/clips/{id} re-renders from the stored source. source_file column + non-destructive migration; pre-existing clips backfilled by timestamp/duration matching.
