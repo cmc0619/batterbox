@@ -115,10 +115,10 @@ Status object:
 { "available": true, "pairing": false, "detail": "Bluetooth ready",
   "devices": [{ "name": "SRS-XB13", "mac": "AA:BB:CC:DD:EE:FF", "connected": true }] }
 ```
-`available=false` (PC dev, no BlueZ/D-Bus) → `devices` is empty and `detail` is human-readable; only "unavailable" ever produces an HTTP error (400).
+`available=false` (PC dev, no BlueZ/D-Bus) → `devices` is empty and `detail` is human-readable; only "unavailable" and a failed pairing start ever produce an HTTP error (400).
 
 - `GET /api/bluetooth/status` → status object
-- `POST /api/bluetooth/pairing` `{ "duration_sec": 120 }` → status (makes the Pi discoverable/pairable with auto-accept agent for duration_sec; re-posting extends the window; 400 if unavailable)
+- `POST /api/bluetooth/pairing` `{ "duration_sec": 120 }` → status (makes the Pi discoverable/pairable with auto-accept agent for duration_sec; re-posting extends the window). 400 if unavailable, **or** if the adapter could not actually be made pairable/discoverable — pairing mode is only reported active when the adapter state commands succeeded (on failure the adapter is restored best-effort and `detail` carries the bluetoothctl error).
 - `POST /api/bluetooth/pairing/stop` → status (ends pairing mode early)
 - `POST /api/bluetooth/connect` `{ "mac": "AA:BB:CC:DD:EE:FF" }` → status (connect attempt to a known device; 400 if unavailable, otherwise a failed attempt returns 200 with the error in `detail`)
 
