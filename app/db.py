@@ -384,28 +384,35 @@ def delete_team(team_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def _unlink_quietly(path: str) -> None:
+    """Remove a file, tolerating a concurrent delete of the same path.
+    exists()-then-remove() is TOCTOU: two deletes of clips that share a
+    source file both see it present, and the loser would otherwise raise
+    an uncaught FileNotFoundError that 500s an already-successful delete."""
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.warning("could not remove %s: %s", path, e)
+
+
 def _remove_files(
     clip_ids: list[int],
     photo_urls: list[str],
     source_files: list[str] | None = None,
 ) -> None:
     for cid in clip_ids:
-        path = os.path.join(config.DATA_DIR, "clips", f"{cid}.mp3")
-        if os.path.exists(path):
-            os.remove(path)
+        _unlink_quietly(os.path.join(config.DATA_DIR, "clips", f"{cid}.mp3"))
     for url in photo_urls:
-        path = os.path.join(config.DATA_DIR, "photos", os.path.basename(url))
-        if os.path.exists(path):
-            os.remove(path)
+        _unlink_quietly(os.path.join(config.DATA_DIR, "photos", os.path.basename(url)))
     # Trim sources leak forever otherwise (roster churn grows the volume
     # unbounded). Called AFTER the rows are deleted, so the reference check
     # sees only surviving clips/hype — a source shared with them is kept.
     for name in source_files or []:
         if not name or source_file_referenced(name):
             continue
-        path = os.path.join(config.DATA_DIR, "sources", os.path.basename(name))
-        if os.path.exists(path):
-            os.remove(path)
+        _unlink_quietly(os.path.join(config.DATA_DIR, "sources", os.path.basename(name)))
 
 
 # ----------------------------------------------------------------- players
@@ -814,8 +821,6 @@ def delete_hype(hype_id: int) -> bool:
         cur = conn.execute("DELETE FROM hype WHERE id = ?", (hype_id,))
         conn.commit()
     if cur.rowcount:
-        path = os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3")
-        if os.path.exists(path):
-            os.remove(path)
+        _unlink_quietly(os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3"))
         _remove_files([], [], [row["source_file"]] if row else [])
     return cur.rowcount > 0
