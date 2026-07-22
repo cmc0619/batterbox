@@ -46,6 +46,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def no_cache_middleware(request, call_next):
+    """LAN kiosk app: always revalidate. A stale cached JS paired with new HTML
+    breaks the UI after deploys (e.g. old grid.js referencing removed elements).
+    no-cache still lets ETag/304 do its job, so this costs almost nothing locally."""
+    response = await call_next(request)
+    if request.method == "GET":
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 for sub in ("", "clips", "sources", "photos"):
     os.makedirs(os.path.join(config.DATA_DIR, sub), exist_ok=True)
 
