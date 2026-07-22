@@ -61,7 +61,7 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
 
 - `GET /api/players/{id}/clips` → `[clip]`
 - `POST /api/clips/import/youtube` `{ "player_id", "type", "url" }` → `{ "job_id" }` (async)
-- `POST /api/clips/import/upload?player_id=1&type=walkup` multipart `file` (mp3/m4a) → `{ "job_id" }` (async)
+- `POST /api/clips/import/upload?player_id=1&type=walkup` multipart `file` (mp3/m4a, ≤50MB) → `{ "job_id" }` (async)
 - `GET /api/jobs/{job_id}` →
   `{ "job_id", "status": "pending"|"processing"|"done"|"error", "detail": "",
      "duration_sec": 213.4, "suggested_start": 34.0, "suggested_end": 46.0,
@@ -92,7 +92,7 @@ Hype clip object:
 
 - `GET /api/hype` → `[hype clip]`
 - `POST /api/hype/import/youtube` `{ "title", "url" }` → `{ "job_id" }` (async, 202; same job pipeline / `GET /api/jobs/{job_id}` as player clips)
-- `POST /api/hype/import/upload?title=X` multipart `file` (mp3/m4a) → `{ "job_id" }` (async, 202)
+- `POST /api/hype/import/upload?title=X` multipart `file` (mp3/m4a, ≤50MB) → `{ "job_id" }` (async, 202)
 - `POST /api/hype` `{ "job_id", "title", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → hype clip (201; same ffmpeg slice + fades + loudnorm → 192k MP3 render as player clips). Same trim validation as PATCH → 400 on violation, checked before anything is saved.
 - `GET /api/hype/{id}/edit_context` → `{ "hype": <hype clip object>, "source_audio_url", "duration_sec", "peaks" }` — same shape as the player-clip version but with `"hype"` instead of `"clip"`. 404 if missing; 409 if no stored source / source file gone.
 - `PATCH /api/hype/{id}` `{ "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` (all required) → updated hype clip (re-renders from the stored source, temp-file-then-move, updates `duration_sec`). Same semantics/errors as player clips: 404 missing, 409 source gone, 400 on validation failure.
