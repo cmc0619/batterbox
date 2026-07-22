@@ -153,6 +153,7 @@ function connect() {
 const playback = {
   play: (player_id, type) => api('/api/playback/play', { method: 'POST', body: { player_id, type } }),
   playClip: (clip_id) => api('/api/playback/play_clip', { method: 'POST', body: { clip_id } }),
+  playHype: (hype_id) => api('/api/playback/play_hype', { method: 'POST', body: { hype_id } }),
   stop: () => api('/api/playback/stop', { method: 'POST' }),
   next: () => api('/api/playback/next', { method: 'POST' }),
   setVolume: (volume) => api('/api/playback/volume', { method: 'POST', body: { volume: Math.max(0, Math.min(100, Math.round(volume))) } }),

@@ -14,10 +14,11 @@
     <button type="button" class="page-arrow" id="page-prev" hidden aria-label="Previous page">&#8249;</button>
     <div id="page-indicator" hidden></div>
     <button type="button" class="page-arrow" id="page-next" hidden aria-label="Next page">&#8250;</button>
-    <button type="button" id="btn-pitchers" aria-pressed="false" title="Pitching mode — show only players with a walk-out song">PITCHERS</button>
-    <button type="button" class="vol-btn" id="vol-down" aria-label="Volume down">−</button>
-    <span class="vol-label" id="vol-label">–</span>
-    <button type="button" class="vol-btn" id="vol-up" aria-label="Volume up">+</button>
+    <div id="mode-switch" role="group" aria-label="Kiosk mode">
+      <button type="button" class="mode-btn on" id="mode-o" aria-pressed="true" title="Offense — batting order (walk-up / home-run)">O</button>
+      <button type="button" class="mode-btn" id="mode-d" aria-pressed="false" title="Defense — players with a walk-out song">D</button>
+      <button type="button" class="mode-btn" id="mode-h" aria-pressed="false" title="Hype — crowd stingers">H</button>
+    </div>
     <button type="button" id="btn-stop">&#9632; STOP</button>
     <a class="nav-btn" href="admin.html">ADMIN</a>
   </div>

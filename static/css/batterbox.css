@@ -162,14 +162,6 @@ a { color: var(--accent-2); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-#topbar .vol-label {
-  align-self: center;
-  font-size: 22px;
-  font-weight: 800;
-  color: var(--dim);
-  min-width: 56px;
-  text-align: center;
-}
 #btn-stop {
   flex: 0 0 auto;
   min-width: 190px;
@@ -180,21 +172,22 @@ a { color: var(--accent-2); }
   border: 3px solid var(--danger);
   border-radius: 16px;
 }
-.vol-btn {
+/* O/D/H kiosk mode switch (replaces the old PITCHERS toggle + vol buttons;
+   volume lives on the mock-GPIO bar / physical GPIO buttons / settings) */
+#mode-switch {
+  display: flex;
+  gap: 8px;
   flex: 0 0 auto;
-  min-width: 84px;
-  font-size: 34px;
-  font-weight: 900;
 }
-
-#btn-pitchers {
+.mode-btn {
   flex: 0 0 auto;
-  font-size: 24px;
+  min-width: 70px;
+  font-size: 28px;
   font-weight: 900;
   letter-spacing: 1px;
   padding: 10px 14px;
 }
-#btn-pitchers.on {
+.mode-btn.on {
   background: #1d4ed8;
   border-color: var(--accent-2);
   color: #fff;
@@ -294,6 +287,20 @@ a { color: var(--accent-2); }
   align-items: center;
   justify-content: center;
   font-size: 26px;
+  font-weight: 900;
+  flex: 0 0 auto;
+}
+.tile .hype-ph {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 2px solid var(--accent);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
   font-weight: 900;
   flex: 0 0 auto;
 }
@@ -411,6 +418,8 @@ a { color: var(--accent-2); }
   body.kiosk { width: auto; height: auto; overflow: auto; }
   #kiosk { width: 100%; height: auto; min-height: 100vh; }
   #topbar { height: auto; flex-wrap: wrap; padding: 4px 0; }
+  #mode-switch { order: 4; flex: 1 1 100%; }
+  #mode-switch .mode-btn { flex: 1 1 0; min-height: 64px; }
   #btn-stop { min-height: 72px; flex: 1 1 100%; order: 5; }
   #grid-wrap { display: none; }
   #phone-list { display: block; padding: 6px; }
@@ -431,7 +440,7 @@ a { color: var(--accent-2); }
     touch-action: manipulation;
   }
   .prow.pressed { filter: brightness(1.5); }
-  .prow .photo, .prow .jersey-ph { width: 60px; height: 60px; font-size: 26px; }
+  .prow .photo, .prow .jersey-ph, .prow .hype-ph { width: 60px; height: 60px; font-size: 26px; }
   .prow .pname { font-size: 26px; font-weight: 800; flex: 1 1 auto; }
   .prow .jnum { font-size: 20px; color: var(--dim); font-weight: 700; }
   .prow.playing {

@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .routers import bluetooth, clips, playback, players, settings, teams, wifi
+from .routers import bluetooth, clips, hype, playback, players, settings, teams, wifi
 from .services import audio, gpio
 
 logging.basicConfig(
@@ -57,12 +57,13 @@ async def no_cache_middleware(request, call_next):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
-for sub in ("", "clips", "sources", "photos"):
+for sub in ("", "clips", "sources", "photos", "hype"):
     os.makedirs(os.path.join(config.DATA_DIR, sub), exist_ok=True)
 
 app.include_router(teams.router)
 app.include_router(players.router)
 app.include_router(clips.router)
+app.include_router(hype.router)
 app.include_router(playback.router)
 app.include_router(bluetooth.router)
 app.include_router(wifi.router)

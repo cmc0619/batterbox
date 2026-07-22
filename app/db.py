@@ -48,6 +48,20 @@ CREATE TABLE IF NOT EXISTS clips (
   source_file TEXT,
   created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS hype (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  source TEXT,
+  source_url TEXT,
+  duration_sec REAL,
+  trim_start_sec REAL,
+  trim_end_sec REAL,
+  fade_in_ms INTEGER NOT NULL DEFAULT 0,
+  fade_out_ms INTEGER NOT NULL DEFAULT 0,
+  volume_boost_db REAL NOT NULL DEFAULT 0,
+  source_file TEXT,
+  created_at TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
@@ -72,7 +86,7 @@ def init_db() -> None:
         conn = get_conn()
         conn.executescript(SCHEMA)
         _migrate(conn)
-        for sub in ("clips", "sources", "photos"):
+        for sub in ("clips", "sources", "photos", "hype"):
             os.makedirs(os.path.join(config.DATA_DIR, sub), exist_ok=True)
         defaults = {
             "default_snippet_length": "30",
@@ -629,4 +643,121 @@ def delete_clip(clip_id: int) -> bool:
         conn.commit()
     if cur.rowcount:
         _remove_files([clip_id], [])
+    return cur.rowcount > 0
+
+
+# -------------------------------------------------------------------- hype
+
+
+def _hype_to_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "source": row["source"],
+        "source_url": row["source_url"],
+        "audio_url": f"/media/hype/{row['id']}.mp3",
+        "duration_sec": row["duration_sec"],
+        "trim_start_sec": row["trim_start_sec"],
+        "trim_end_sec": row["trim_end_sec"],
+        "fade_in_ms": row["fade_in_ms"],
+        "fade_out_ms": row["fade_out_ms"],
+        "volume_boost_db": row["volume_boost_db"],
+        "created_at": row["created_at"],
+    }
+
+
+def list_hype() -> list[dict]:
+    with _lock:
+        rows = get_conn().execute("SELECT * FROM hype ORDER BY id").fetchall()
+    return [_hype_to_dict(r) for r in rows]
+
+
+def get_hype(hype_id: int) -> dict | None:
+    with _lock:
+        row = get_conn().execute("SELECT * FROM hype WHERE id = ?", (hype_id,)).fetchone()
+    return _hype_to_dict(row) if row else None
+
+
+def insert_hype(
+    title: str,
+    source: str,
+    source_url: str | None,
+    duration_sec: float,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+    volume_boost_db: float,
+    source_file: str | None = None,
+) -> int:
+    with _lock:
+        conn = get_conn()
+        cur = conn.execute(
+            "INSERT INTO hype (title, source, source_url, duration_sec,"
+            " trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms,"
+            " volume_boost_db, source_file, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                title,
+                source,
+                source_url,
+                duration_sec,
+                trim_start_sec,
+                trim_end_sec,
+                fade_in_ms,
+                fade_out_ms,
+                volume_boost_db,
+                source_file,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_hype_source_file(hype_id: int) -> str | None:
+    """Internal: relative filename of the hype clip's full source in sources/."""
+    with _lock:
+        row = get_conn().execute(
+            "SELECT source_file FROM hype WHERE id = ?", (hype_id,)
+        ).fetchone()
+    return row["source_file"] if row else None
+
+
+def update_hype_trim(
+    hype_id: int,
+    duration_sec: float,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+    volume_boost_db: float,
+) -> None:
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE hype SET duration_sec = ?, trim_start_sec = ?, trim_end_sec = ?,"
+            " fade_in_ms = ?, fade_out_ms = ?, volume_boost_db = ? WHERE id = ?",
+            (
+                duration_sec,
+                trim_start_sec,
+                trim_end_sec,
+                fade_in_ms,
+                fade_out_ms,
+                volume_boost_db,
+                hype_id,
+            ),
+        )
+        conn.commit()
+
+
+def delete_hype(hype_id: int) -> bool:
+    with _lock:
+        conn = get_conn()
+        cur = conn.execute("DELETE FROM hype WHERE id = ?", (hype_id,))
+        conn.commit()
+    if cur.rowcount:
+        path = os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3")
+        if os.path.exists(path):
+            os.remove(path)
     return cur.rowcount > 0

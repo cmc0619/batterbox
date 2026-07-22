@@ -3,7 +3,7 @@
 This is the **binding contract** between backend and frontend. Both sides MUST implement exactly these endpoints, shapes, and behaviors. If a change is needed, update this file in the same commit.
 
 - Static frontend served at `/` (index.html, admin.html, edit.html).
-- Media files (clips, photos) served from `/media/...` mapped to the `DATA_DIR` volume (`/data` in container, `./data` on host).
+- Media files (clips, photos, sources, hype) served from `/media/...` mapped to the `DATA_DIR` volume (`/data` in container, `./data` on host).
 - All JSON. All IDs are integers. Times are float seconds. Volume is int 0–100.
 
 ## WebSocket — `/ws`
@@ -12,11 +12,14 @@ Server → client JSON messages. Clients never send.
 
 ```json
 { "event": "play",    "clip_id": 3, "player_id": 7, "type": "walkup", "audio_url": "/media/clips/3.mp3", "volume": 80, "volume_boost_db": 0.0 }
+{ "event": "play",    "clip_id": 2, "player_id": null, "type": "hype", "audio_url": "/media/hype/2.mp3", "volume": 80, "volume_boost_db": 0.0 }
 { "event": "stop" }
 { "event": "volume",  "volume": 65 }
 { "event": "warning", "message": "No audio output device found" }
 { "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "volume": 80 }
 ```
+
+`type` is `walkup`|`homerun`|`walkout` for player clips, or `hype` for hype clips — a hype play has `player_id: null` and `clip_id` = the hype clip id. The `state` message carries the same `type` semantics.
 
 Browser playback backend: on `play`, clients play `audio_url` via HTMLAudioElement at `volume` (0–100 → 0–1), applying `volume_boost_db` via WebAudio GainNode when nonzero. On `stop`, halt immediately (<200ms). On connect, server sends a `state` message.
 
@@ -75,14 +78,35 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
 - `POST /api/clips/{id}/activate` → clip (clears is_active on sibling clips of same player+type)
 - `DELETE /api/clips/{id}` → 204 (removes file; clears active flag)
 
+## Hype clips
+
+Crowd stingers ("Charge!", "Take Me Out to the Ballgame") **not tied to any player** — played from the kiosk's H mode. Same import-job/render pipeline as player clips, but keyed by a `title` (1–80 chars, required) instead of player_id/type. Rendered audio lives at `DATA_DIR/hype/<id>.mp3` → `/media/hype/<id>.mp3`.
+
+Hype clip object:
+```json
+{ "id", "title": "Charge!", "source": "youtube"|"upload", "source_url": "...",
+  "audio_url": "/media/hype/1.mp3",
+  "duration_sec": 6.0, "trim_start_sec": 0.0, "trim_end_sec": 6.0,
+  "fade_in_ms": 300, "fade_out_ms": 500, "volume_boost_db": 0.0, "created_at": "iso" }
+```
+
+- `GET /api/hype` → `[hype clip]`
+- `POST /api/hype/import/youtube` `{ "title", "url" }` → `{ "job_id" }` (async, 202; same job pipeline / `GET /api/jobs/{job_id}` as player clips)
+- `POST /api/hype/import/upload?title=X` multipart `file` (mp3/m4a) → `{ "job_id" }` (async, 202)
+- `POST /api/hype` `{ "job_id", "title", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → hype clip (201; same ffmpeg slice + fades + loudnorm → 192k MP3 render as player clips)
+- `GET /api/hype/{id}/edit_context` → `{ "hype": <hype clip object>, "source_audio_url", "duration_sec", "peaks" }` — same shape as the player-clip version but with `"hype"` instead of `"clip"`. 404 if missing; 409 if no stored source / source file gone.
+- `PATCH /api/hype/{id}` `{ "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` (all required) → updated hype clip (re-renders from the stored source, temp-file-then-move, updates `duration_sec`). Same semantics/errors as player clips: 404 missing, 409 source gone, 400 on validation failure.
+- `DELETE /api/hype/{id}` → 204 (removes file)
+
 ## Playback
 
 - `POST /api/playback/play` `{ "player_id", "type" }` → state (plays active clip of that type — `walkup`|`homerun`|`walkout`; 404 if none; stops current first)
 - `POST /api/playback/play_clip` `{ "clip_id" }` → state
+- `POST /api/playback/play_hype` `{ "hype_id" }` → state (404 if the hype clip doesn't exist; stops current first, then broadcasts WS `play` with `type: "hype"`, `player_id: null`, `clip_id` = hype id, `audio_url`, `volume`, `volume_boost_db`). `GET /api/playback/state` and the WS `state` message report `type: "hype"` while a hype clip is playing.
 - `POST /api/playback/stop` → state (halt ≤200ms)
 - `POST /api/playback/volume` `{ "volume": 0-100 }` → state (persisted to settings)
 - `POST /api/playback/next` → state (next player in active team's batting order — wraps around — with an active walkup clip; plays it)
-- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "volume", "audio_warning": null|"..." }`
+- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "volume", "audio_warning": null|"..." }` (`type` is a clip type or `"hype"`)
 
 ## Bluetooth speaker pairing
 
@@ -122,4 +146,4 @@ Status object:
 
 ## GPIO / mock buttons
 
-GPIO handlers (real or mock) call the playback endpoints above — no separate code path. Mock mode keyboard map (implemented in frontend, calls REST): `Space` = stop, `ArrowUp/ArrowDown` = volume ±5, `N` = next batter. On-screen debug buttons visible when `mock_gpio` is true.
+GPIO handlers (real or mock) call the playback endpoints above — no separate code path. Mock mode keyboard map (implemented in frontend, calls REST): `Space` = stop, `ArrowUp/ArrowDown` = volume ±5, `N` = next batter. On-screen debug buttons visible when `mock_gpio` is true. Hype clips are played from the kiosk's on-screen H mode only — there is deliberately **no** mock-GPIO keyboard `H` shortcut.

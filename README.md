@@ -7,6 +7,7 @@ BatterBox is a walk-up song player for youth baseball, hosted on a Raspberry Pi 
 ## What it does
 
 - **Kiosk grid** — 1024×600 touchscreen layout, one big tile per player, photo + name + number. Tap = walk-up clip, long-press (600ms) = home-run clip. Instant switch, STOP in under 200ms.
+- **O/D/H mode switch** — Offense (batting grid), Defense (pitcher walk-out songs), or Hype (crowd stingers like "Charge!" — not tied to any player, tap to fire).
 - **Multiple teams** — switch the active team per game; each team has its own batting order. Touch drag-and-drop reorder in the admin screen.
 - **Clip workflow** — import from YouTube or upload mp3/m4a, trim on a waveform editor, add fades and volume boost, loudness-normalized to 192k MP3.
 - **Physical buttons** — wire real buttons to the Pi's GPIO pins for STOP / next batter / volume, or use the on-screen/keyboard mock buttons.
