@@ -96,6 +96,22 @@ Status object:
 - `POST /api/bluetooth/pairing/stop` → status (ends pairing mode early)
 - `POST /api/bluetooth/connect` `{ "mac": "AA:BB:CC:DD:EE:FF" }` → status (connect attempt to a known device; 400 if unavailable, otherwise a failed attempt returns 200 with the error in `detail`)
 
+## Wi-Fi hotspot
+
+The Pi can broadcast its own hotspot (NetworkManager connection con-name `batterbox`) instead of joining a phone's tethered hotspot.
+
+Status object:
+```json
+{ "available": true, "detail": "Hotspot ON — SSID 'BatterBox' (10.42.0.1) — join it and open http://batterbox.local",
+  "mode": "hotspot", "hotspot_active": true, "ssid": "BatterBox", "password": "bigleague1", "ip": "10.42.0.1" }
+```
+`mode` ∈ `"hotspot"|"client"|"offline"|"unknown"`. `ssid`/`password` are the **stored** settings (returned in plain text for form prefill — private-LAN appliance, no auth; the coach reads the password aloud). `mode`/`hotspot_active`/`ip` describe **live** state. `available=false` (PC dev — no nmcli/D-Bus/NetworkManager) → mode `"unknown"`, `hotspot_active` false, `ip` null, human-readable `detail`; defaults (`BatterBox` / `bigleague1`) are still present.
+
+- `GET /api/wifi/status` → status object (always 200)
+- `POST /api/wifi/hotspot` `{ "ssid", "password" }` → status. Validation (ssid 1–32 chars, password 8–63 printable ASCII) and availability are checked **before** anything is saved — on 400 the stored settings are untouched. On success the credentials are persisted and the hotspot is created (any stale `batterbox` profile is deleted first) and started. 400 with detail on validation failure, unavailable, or nmcli failure. The response `detail` reminds that the Pi drops off its current network — admin devices must join the new SSID (browse to http://batterbox.local or http://10.42.0.1).
+- `POST /api/wifi/hotspot/off` → status (400 if unavailable; a failed "connection down" on an available adapter returns 200 with the error in `detail`). NetworkManager rejoins any remembered client network (e.g. the iPhone) on its own; `detail` notes when none came up.
+- `POST /api/wifi/settings` `{ "ssid", "password" }` → status. Saves credentials only — **no radio change** — so it works when Wi-Fi is unavailable (configure at home on PC). 400 on validation failure; stored settings unchanged on failure.
+
 ## Settings
 
 - `GET /api/settings` → `{ "default_snippet_length": 12, "master_volume": 80, "audio_output": "auto", "mock_gpio": true }`

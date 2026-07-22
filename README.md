@@ -112,10 +112,12 @@ Target: Raspberry Pi OS 64-bit (Bookworm or later), Pi 4 or 5 recommended.
 
    The Pi remembers the network and rejoins automatically. Side effect: the Pi has real internet through the phone — YouTube imports and the yt-dlp auto-update keep working at the field.
 
-   **Option B — Pi runs its own hotspot (fully offline).** No internet anywhere; good when there's no cell signal:
+   **Option B — Pi runs its own hotspot (fully offline).** No internet anywhere; good when there's no cell signal — or when the phone plan charges for tethering. Everything is done from the admin UI: open Admin → **Wi-Fi Hotspot**, set the SSID and password (defaults: `BatterBox` / `bigleague1`), and tap **Start Hotspot**. The Pi leaves its current Wi-Fi and broadcasts the new network — join it from your phone and reopen http://batterbox.local (or http://10.42.0.1). **Stop Hotspot** turns it off; the Pi rejoins any remembered network on its own. You can also save the SSID/password ahead of time with **Save Settings** (works on the PC at home, where there's no Wi-Fi radio to control).
+
+   Fallback if the admin UI can't reach the Pi at all, run once on the Pi itself:
 
    ```bash
-   sudo nmcli device wifi hotspot ifname wlan0 ssid BatterBox password "take me out to the ballgame"
+   sudo nmcli device wifi hotspot ifname wlan0 con-name batterbox ssid BatterBox password "bigleague1" band bg
    ```
 
 5. **Find the Pi by name, not IP (mDNS/Bonjour).** Raspberry Pi OS ships with Avahi, which broadcasts the Pi's hostname as `<hostname>.local` — no app-side work needed. Set the hostname once:

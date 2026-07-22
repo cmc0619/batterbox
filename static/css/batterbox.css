@@ -593,6 +593,17 @@ body.admin, body.editor {
 .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
 .form-row input { flex: 1 1 200px; }
 
+/* admin Wi-Fi hotspot section */
+.wifi-status { font-size: 20px; font-weight: 800; margin: 0 0 10px; }
+.wifi-status.on { color: var(--ok); }
+.wifi-status.off { color: var(--dim); }
+.wifi-hint { color: var(--dim); font-size: 18px; margin: 6px 0 0; }
+#wifi-section .active-team-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--panel);
+}
+
 /* ---------- editor ---------- */
 
 .editor-main {

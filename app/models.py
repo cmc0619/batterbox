@@ -80,6 +80,14 @@ class BluetoothConnectRequest(BaseModel):
     mac: str = Field(pattern=r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 
+class WifiCredentials(BaseModel):
+    # Kept loose on purpose: WPA2 rules (ssid 1-32, password 8-63 printable
+    # ASCII) are enforced by services.wifi so failures come back as 400 with
+    # a human-readable detail instead of a pydantic 422.
+    ssid: str
+    password: str
+
+
 class SettingsPatch(BaseModel):
     default_snippet_length: int | None = None
     master_volume: int | None = Field(default=None, ge=0, le=100)

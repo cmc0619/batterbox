@@ -79,6 +79,10 @@ def init_db() -> None:
             "master_volume": "80",
             "audio_output": config.AUDIO_OUTPUT,
             "mock_gpio": "true" if config.MOCK_GPIO else "false",
+            # Wi-Fi hotspot credentials (plain text by design — private-LAN
+            # appliance, no auth; admin UI reads the password back aloud)
+            "wifi_ssid": "BatterBox",
+            "wifi_password": "bigleague1",
             # GPIO pins (not part of the public settings contract)
             "gpio_stop_pin": "17",
             "gpio_volume_up_pin": "27",
