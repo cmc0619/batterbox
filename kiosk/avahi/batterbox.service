@@ -1,0 +1,24 @@
+<?xml version="1.0" standalone='no'?>
+<!--
+  Avahi (Bonjour/mDNS) service advertisement for BatterBox.
+
+  Raspberry Pi OS already runs Avahi, which advertises the Pi's hostname as
+  <hostname>.local — so with the hostname set to "batterbox", phones on the
+  same network reach the app at http://batterbox.local with zero config.
+
+  This file is OPTIONAL polish: it additionally advertises the web UI as a
+  Bonjour service (shows up in Bonjour browsers / discovery tools as
+  "BatterBox Walk-Up Songs").
+
+  Install:
+    sudo cp kiosk/avahi/batterbox.service /etc/avahi/services/batterbox.service
+    sudo systemctl restart avahi-daemon
+-->
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">BatterBox Walk-Up Songs</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>80</port>
+  </service>
+</service-group>
