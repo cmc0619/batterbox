@@ -57,7 +57,9 @@ async def no_cache_middleware(request, call_next):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
-for sub in ("", "clips", "sources", "photos", "hype"):
+MEDIA_SUBDIRS = ("clips", "sources", "photos", "hype")
+
+for sub in ("",) + MEDIA_SUBDIRS:
     os.makedirs(os.path.join(config.DATA_DIR, sub), exist_ok=True)
 
 app.include_router(teams.router)
@@ -85,7 +87,15 @@ async def websocket_endpoint(websocket: WebSocket):
         audio.ws_manager.disconnect(websocket)
 
 
-app.mount("/media", StaticFiles(directory=config.DATA_DIR), name="media")
+# Mount each media subdir individually rather than DATA_DIR itself, so
+# non-media files at the volume root (batterbox.db, mpv.sock) are never
+# served over HTTP.
+for sub in MEDIA_SUBDIRS:
+    app.mount(
+        f"/media/{sub}",
+        StaticFiles(directory=os.path.join(config.DATA_DIR, sub)),
+        name=f"media-{sub}",
+    )
 
 # Static frontend is owned by another slice; mount only when present.
 _static_dir = Path(__file__).resolve().parent.parent / "static"
