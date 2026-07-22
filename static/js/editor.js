@@ -13,7 +13,8 @@ const params = new URLSearchParams(location.search);
 const playerId = Number(params.get('player_id'));
 const clipId = Number(params.get('clip_id'));
 const reeditMode = clipId > 0; // ?clip_id=N re-opens a saved clip's trim
-let clipType = params.get('type') === 'homerun' ? 'homerun' : 'walkup';
+const typeParam = params.get('type');
+let clipType = ['walkup', 'homerun', 'walkout'].includes(typeParam) ? typeParam : 'walkup';
 
 const banner = document.getElementById('warn-banner');
 const jobStatus = document.getElementById('job-status');

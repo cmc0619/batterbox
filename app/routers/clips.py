@@ -31,8 +31,8 @@ def import_youtube(body: YoutubeImport):
 
 @router.post("/api/clips/import/upload", status_code=202)
 async def import_upload(player_id: int, type: str, file: UploadFile = File(...)):
-    if type not in ("walkup", "homerun"):
-        raise HTTPException(400, "type must be walkup or homerun")
+    if type not in ("walkup", "homerun", "walkout"):
+        raise HTTPException(400, "type must be walkup, homerun or walkout")
     if db.get_player(player_id) is None:
         raise HTTPException(404, f"player {player_id} not found")
     ext = os.path.splitext(file.filename or "")[1].lower()

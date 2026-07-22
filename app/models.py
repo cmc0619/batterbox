@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ClipType = Literal["walkup", "homerun"]
+ClipType = Literal["walkup", "homerun", "walkout"]
 
 
 class TeamCreate(BaseModel):

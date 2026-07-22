@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS players (
 CREATE TABLE IF NOT EXISTS clips (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('walkup','homerun')),
+  type TEXT NOT NULL CHECK (type IN ('walkup','homerun','walkout')),
   is_active INTEGER NOT NULL DEFAULT 0,
   source TEXT NOT NULL,
   source_url TEXT,
@@ -75,7 +75,7 @@ def init_db() -> None:
         for sub in ("clips", "sources", "photos"):
             os.makedirs(os.path.join(config.DATA_DIR, sub), exist_ok=True)
         defaults = {
-            "default_snippet_length": "12",
+            "default_snippet_length": "30",
             "master_volume": "80",
             "audio_output": config.AUDIO_OUTPUT,
             "mock_gpio": "true" if config.MOCK_GPIO else "false",
@@ -98,7 +98,7 @@ def init_db() -> None:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Non-destructive column additions for DBs created by older versions."""
+    """Non-destructive upgrades for DBs created by older versions."""
     cols = [r["name"] for r in conn.execute("PRAGMA table_info(clips)")]
     if "source_file" not in cols:
         conn.execute("ALTER TABLE clips ADD COLUMN source_file TEXT")
@@ -111,6 +111,60 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )
         conn.commit()
         log.info("Migrated players table: added absent column")
+
+    # SQLite can't ALTER a CHECK constraint — rebuild clips atomically when the
+    # old ('walkup','homerun')-only CHECK is present so 'walkout' is accepted.
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'clips'"
+    ).fetchone()
+    if row and row["sql"] and "walkout" not in row["sql"]:
+        conn.execute("BEGIN")
+        try:
+            conn.execute(
+                """
+                CREATE TABLE clips_new (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+                  type TEXT NOT NULL CHECK (type IN ('walkup','homerun','walkout')),
+                  is_active INTEGER NOT NULL DEFAULT 0,
+                  source TEXT NOT NULL,
+                  source_url TEXT,
+                  duration_sec REAL,
+                  trim_start_sec REAL,
+                  trim_end_sec REAL,
+                  fade_in_ms INTEGER NOT NULL DEFAULT 0,
+                  fade_out_ms INTEGER NOT NULL DEFAULT 0,
+                  volume_boost_db REAL NOT NULL DEFAULT 0,
+                  source_file TEXT,
+                  created_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO clips_new (id, player_id, type, is_active, source,"
+                " source_url, duration_sec, trim_start_sec, trim_end_sec,"
+                " fade_in_ms, fade_out_ms, volume_boost_db, source_file,"
+                " created_at)"
+                " SELECT id, player_id, type, is_active, source, source_url,"
+                " duration_sec, trim_start_sec, trim_end_sec, fade_in_ms,"
+                " fade_out_ms, volume_boost_db, source_file, created_at FROM clips"
+            )
+            conn.execute("DROP TABLE clips")
+            conn.execute("ALTER TABLE clips_new RENAME TO clips")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        log.info("Migrated clips table: rebuilt with 'walkout' in the type CHECK")
+
+    # Snippet default grew 12s -> 30s; upgrade only untouched defaults.
+    cur = conn.execute(
+        "UPDATE settings SET value = '30'"
+        " WHERE key = 'default_snippet_length' AND value = '12'"
+    )
+    if cur.rowcount:
+        conn.commit()
+        log.info("Migrated settings: default_snippet_length 12 -> 30")
 
 
 def _seed_if_empty(conn: sqlite3.Connection) -> None:
@@ -203,7 +257,7 @@ def set_setting(key: str, value) -> None:
 
 def public_settings() -> dict:
     return {
-        "default_snippet_length": int(get_setting("default_snippet_length", "12")),
+        "default_snippet_length": int(get_setting("default_snippet_length", "30")),
         "master_volume": int(get_setting("master_volume", "80")),
         "audio_output": get_setting("audio_output", "auto"),
         "mock_gpio": get_setting("mock_gpio", "true") == "true",
@@ -316,7 +370,9 @@ SELECT p.*,
  (SELECT c.id FROM clips c WHERE c.player_id = p.id AND c.type = 'walkup'
    AND c.is_active = 1 LIMIT 1) AS active_walkup_clip_id,
  (SELECT c.id FROM clips c WHERE c.player_id = p.id AND c.type = 'homerun'
-   AND c.is_active = 1 LIMIT 1) AS active_homerun_clip_id
+   AND c.is_active = 1 LIMIT 1) AS active_homerun_clip_id,
+ (SELECT c.id FROM clips c WHERE c.player_id = p.id AND c.type = 'walkout'
+   AND c.is_active = 1 LIMIT 1) AS active_walkout_clip_id
 FROM players p
 """
 
@@ -332,6 +388,7 @@ def _player_to_dict(row: sqlite3.Row) -> dict:
         "absent": bool(row["absent"]),
         "active_walkup_clip_id": row["active_walkup_clip_id"],
         "active_homerun_clip_id": row["active_homerun_clip_id"],
+        "active_walkout_clip_id": row["active_walkout_clip_id"],
     }
 
 

@@ -15,11 +15,21 @@ const walter = document.getElementById('walter');
 const pagePrev = document.getElementById('page-prev');
 const pageNext = document.getElementById('page-next');
 const pageIndicator = document.getElementById('page-indicator');
+const pitchersBtn = document.getElementById('btn-pitchers');
 
 let players = [];
 let page = 0;
 let playingPlayerId = null;
 let bannerTimer = null;
+// Pitching mode (PITCHERS toggle): grid/phone list show only players with an
+// active walkout clip; tap plays the walkout song. Client-side only.
+let pitchingMode = false;
+
+function visiblePlayers() {
+  return pitchingMode
+    ? players.filter((p) => p.active_walkout_clip_id != null)
+    : players;
+}
 
 /* ---------------- helpers ---------------- */
 
@@ -82,7 +92,7 @@ function attachPressHandlers(el, player) {
     clear();
     longFired = false;
     if (wasLong) return; // suppress tap after long-press
-    BB.playback.play(player.id, 'walkup')
+    BB.playback.play(player.id, pitchingMode ? 'walkout' : 'walkup')
       .catch((err) => showBanner(err.message, false));
   });
   el.addEventListener('pointercancel', clear);
@@ -111,9 +121,10 @@ function buildPlayerEl(player, kind) {
 }
 
 function render() {
-  const totalPages = Math.max(1, Math.ceil(players.length / PAGE_SIZE));
+  const list = visiblePlayers();
+  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
   page = Math.min(page, totalPages - 1);
-  const slice = players.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+  const slice = list.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
   gridEl.textContent = '';
   for (const p of slice) gridEl.appendChild(buildPlayerEl(p, 'tile'));
@@ -124,9 +135,9 @@ function render() {
   }
 
   phoneListEl.textContent = '';
-  for (const p of players) phoneListEl.appendChild(buildPlayerEl(p, 'prow'));
+  for (const p of list) phoneListEl.appendChild(buildPlayerEl(p, 'prow'));
 
-  const paged = players.length > PAGE_SIZE;
+  const paged = list.length > PAGE_SIZE;
   pagePrev.hidden = !paged;
   pageNext.hidden = !paged;
   pageIndicator.hidden = !paged;
@@ -182,7 +193,14 @@ document.getElementById('vol-down').addEventListener('click', () => {
 });
 pagePrev.addEventListener('click', () => { page = Math.max(0, page - 1); render(); });
 pageNext.addEventListener('click', () => {
-  page = Math.min(Math.ceil(players.length / PAGE_SIZE) - 1, page + 1);
+  page = Math.min(Math.ceil(visiblePlayers().length / PAGE_SIZE) - 1, page + 1);
+  render();
+});
+pitchersBtn.addEventListener('click', () => {
+  pitchingMode = !pitchingMode;
+  pitchersBtn.classList.toggle('on', pitchingMode);
+  pitchersBtn.setAttribute('aria-pressed', String(pitchingMode));
+  page = 0;
   render();
 });
 
