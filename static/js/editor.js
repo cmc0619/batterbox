@@ -120,6 +120,7 @@ document.getElementById('btn-yt').addEventListener('click', () => {
 document.getElementById('btn-upload').addEventListener('click', () => {
   const f = document.getElementById('file-input').files[0];
   if (!f) { setJobStatus('Pick an mp3/m4a file first.', true); return; }
+  if (f.size > 50 * 1024 * 1024) { setJobStatus('File must be ≤50MB.', true); return; }
   const fd = new FormData();
   fd.append('file', f);
   if (hypeImportMode) {

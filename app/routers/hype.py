@@ -12,6 +12,8 @@ from ..services import clipper
 router = APIRouter(tags=["hype"])
 
 UPLOAD_EXTS = {".mp3", ".m4a"}
+# Sources are full songs/mixes people trim from; 50MB ≈ 20+ min at 320kbps.
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
 def _validate_title(title: str | None) -> str:
@@ -39,7 +41,11 @@ async def import_upload(title: str, file: UploadFile = File(...)):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in UPLOAD_EXTS:
         raise HTTPException(400, "file must be mp3 or m4a")
-    data = await file.read()
+    # Bounded read: never pull more than the cap (+1 to detect overflow)
+    # into memory, whatever the client sends.
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "file must be 50MB or smaller")
     if not data:
         raise HTTPException(400, "empty file")
     job = clipper.start_hype_upload_job(ext, data)
