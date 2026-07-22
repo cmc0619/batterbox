@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS players (
   name TEXT NOT NULL,
   jersey_number INTEGER,
   photo_url TEXT,
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  absent INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS clips (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,6 +100,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE clips ADD COLUMN source_file TEXT")
         conn.commit()
         log.info("Migrated clips table: added source_file column")
+    pcols = [r["name"] for r in conn.execute("PRAGMA table_info(players)")]
+    if "absent" not in pcols:
+        conn.execute(
+            "ALTER TABLE players ADD COLUMN absent INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.commit()
+        log.info("Migrated players table: added absent column")
 
 
 def _seed_if_empty(conn: sqlite3.Connection) -> None:
@@ -317,6 +325,7 @@ def _player_to_dict(row: sqlite3.Row) -> dict:
         "jersey_number": row["jersey_number"],
         "photo_url": row["photo_url"],
         "sort_order": row["sort_order"],
+        "absent": bool(row["absent"]),
         "active_walkup_clip_id": row["active_walkup_clip_id"],
         "active_homerun_clip_id": row["active_homerun_clip_id"],
     }
@@ -356,8 +365,8 @@ def create_player(team_id: int, name: str, jersey_number: int | None) -> dict:
 
 
 def update_player(player_id: int, fields: dict) -> dict | None:
-    """Apply a partial update; `fields` may contain 'name' and/or 'jersey_number'."""
-    allowed = {"name", "jersey_number"}
+    """Apply a partial update; `fields` may contain 'name', 'jersey_number', 'absent'."""
+    allowed = {"name", "jersey_number", "absent"}
     assignments = [(k, v) for k, v in fields.items() if k in allowed]
     with _lock:
         conn = get_conn()

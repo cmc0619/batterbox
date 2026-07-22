@@ -27,6 +27,7 @@ class PlayerCreate(BaseModel):
 class PlayerUpdate(BaseModel):
     name: str | None = None
     jersey_number: int | None = None
+    absent: bool | None = None
 
 
 class PlayersReorder(BaseModel):

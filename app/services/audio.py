@@ -223,7 +223,11 @@ def play_next() -> tuple[dict | None, str | None]:
     if team_id is None:
         return None, "no active team"
     players = db.list_players(team_id)
-    candidates = {p["id"] for p in players if p["active_walkup_clip_id"] is not None}
+    candidates = {
+        p["id"]
+        for p in players
+        if p["active_walkup_clip_id"] is not None and not p.get("absent")
+    }
     if not candidates:
         return None, "no players with an active walkup clip"
     order = [p["id"] for p in players]
