@@ -575,20 +575,22 @@ def create_clip(
     volume_boost_db: float,
 ) -> dict:
     job, src = _done_job_source(job_id)
-    # Same validation as PATCH (incl. trim vs source duration) — fail fast
-    # with a clean 400 before touching the DB, not a 500 out of ffmpeg.
-    src_duration = _probe_source(src)
-    duration = _validate_trim(
-        src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-    )
-    # Render BEFORE inserting the row: renders take seconds, and a row that
-    # exists before its mp3 does is playable-but-404 on every client (and a
-    # crash mid-render would leave it behind permanently). Mark the source
-    # in-use across that window so a concurrent delete/eviction can't unlink
-    # it (no row references it yet) and leave a dangling source_file.
+    # Mark the source in-use before the very first read of it. Probe, validate,
+    # and render all happen while no row references it yet, so a concurrent
+    # eviction (of a stale job sharing this source) could otherwise unlink it
+    # mid-probe. Protect the whole window; release in finally.
     src_name = os.path.basename(src)
     db.mark_source_in_use(src_name)
     try:
+        # Same validation as PATCH (incl. trim vs source duration) — fail fast
+        # with a clean 400 before touching the DB, not a 500 out of ffmpeg.
+        src_duration = _probe_source(src)
+        duration = _validate_trim(
+            src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        )
+        # Render BEFORE inserting the row: renders take seconds, and a row that
+        # exists before its mp3 does is playable-but-404 on every client (and a
+        # crash mid-render would leave it behind permanently).
         tmp = _render_to_temp(
             src, "clips", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
         )
@@ -633,13 +635,13 @@ def create_hype(
     title = title.strip()
     if not title or len(title) > 80:
         raise JobError("title must be 1–80 characters")
-    src_duration = _probe_source(src)
-    duration = _validate_trim(
-        src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-    )
     src_name = os.path.basename(src)
     db.mark_source_in_use(src_name)
     try:
+        src_duration = _probe_source(src)
+        duration = _validate_trim(
+            src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        )
         tmp = _render_to_temp(
             src, "hype", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
         )
