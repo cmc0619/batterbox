@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 import uuid
 from array import array
@@ -401,6 +402,18 @@ def _validate_trim(
     return round(trim_end_sec - trim_start_sec, 3)
 
 
+# One lock per rendered item so two concurrent PATCHes of the same clip
+# can't interleave their file replace and DB update (file from request A,
+# metadata from request B). Grows one small Lock per re-rendered id — fine.
+_item_locks: dict[tuple[str, int], threading.Lock] = {}
+_item_locks_guard = threading.Lock()
+
+
+def _item_lock(dst_dir: str, item_id: int) -> threading.Lock:
+    with _item_locks_guard:
+        return _item_locks.setdefault((dst_dir, item_id), threading.Lock())
+
+
 def _render_to_file(
     src: str,
     dst_dir: str,
@@ -422,7 +435,11 @@ def _render_to_file(
         src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
     )
     dst = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.mp3")
-    tmp = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.tmp.mp3")
+    # Unique per request: a shared <id>.tmp.mp3 would let two concurrent
+    # renders of the same item truncate each other's half-written output.
+    tmp = os.path.join(
+        config.DATA_DIR, dst_dir, f"{item_id}.tmp.{uuid.uuid4().hex[:8]}.mp3"
+    )
     try:
         _render(src, tmp, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
         os.replace(tmp, dst)  # atomic-ish: never a half-written clip file
@@ -443,18 +460,19 @@ def rerender_clip(
 ) -> dict:
     """Re-render a saved clip from its stored source with new trim settings."""
     src = _source_path(db.get_clip_source_file(clip_id))
-    duration = _render_to_file(
-        src, "clips", clip_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-    )
-    db.update_clip_trim(
-        clip_id,
-        duration_sec=duration,
-        trim_start_sec=trim_start_sec,
-        trim_end_sec=trim_end_sec,
-        fade_in_ms=fade_in_ms,
-        fade_out_ms=fade_out_ms,
-        volume_boost_db=volume_boost_db,
-    )
+    with _item_lock("clips", clip_id):
+        duration = _render_to_file(
+            src, "clips", clip_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        )
+        db.update_clip_trim(
+            clip_id,
+            duration_sec=duration,
+            trim_start_sec=trim_start_sec,
+            trim_end_sec=trim_end_sec,
+            fade_in_ms=fade_in_ms,
+            fade_out_ms=fade_out_ms,
+            volume_boost_db=volume_boost_db,
+        )
     return db.get_clip(clip_id)
 
 
@@ -468,18 +486,19 @@ def rerender_hype(
 ) -> dict:
     """Re-render a saved hype clip from its stored source with new trim."""
     src = _source_path(db.get_hype_source_file(hype_id))
-    duration = _render_to_file(
-        src, "hype", hype_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-    )
-    db.update_hype_trim(
-        hype_id,
-        duration_sec=duration,
-        trim_start_sec=trim_start_sec,
-        trim_end_sec=trim_end_sec,
-        fade_in_ms=fade_in_ms,
-        fade_out_ms=fade_out_ms,
-        volume_boost_db=volume_boost_db,
-    )
+    with _item_lock("hype", hype_id):
+        duration = _render_to_file(
+            src, "hype", hype_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        )
+        db.update_hype_trim(
+            hype_id,
+            duration_sec=duration,
+            trim_start_sec=trim_start_sec,
+            trim_end_sec=trim_end_sec,
+            fade_in_ms=fade_in_ms,
+            fade_out_ms=fade_out_ms,
+            volume_boost_db=volume_boost_db,
+        )
     return db.get_hype(hype_id)
 
 
