@@ -190,6 +190,7 @@ function buildPlayerRow(p) {
   const bits = [`#${p.jersey_number ?? '?'}`];
   bits.push(p.active_walkup_clip_id ? 'walkup ✓' : 'walkup —');
   bits.push(p.active_homerun_clip_id ? 'homerun ✓' : 'homerun —');
+  bits.push(p.active_walkout_clip_id ? 'walkout ✓' : 'walkout —');
   if (p.absent) bits.push('ABSENT');
   sub.textContent = bits.join(' · ');
   info.appendChild(nm);
@@ -385,7 +386,7 @@ async function loadClips(p, box) {
     return;
   }
   box.textContent = '';
-  for (const type of ['walkup', 'homerun']) {
+  for (const type of ['walkup', 'homerun', 'walkout']) {
     const group = document.createElement('div');
     group.className = 'clip-group';
     const h = document.createElement('h3');
@@ -409,7 +410,8 @@ async function loadClips(p, box) {
     addB.className = 'btn-primary';
     addB.style.minHeight = '60px';
     addB.style.fontSize = '20px';
-    addB.textContent = `+ Add ${type === 'walkup' ? 'Walk-up' : 'Home-run'} Clip`;
+    const addLabel = { walkup: 'Walk-up', homerun: 'Home-run', walkout: 'Walk-out' }[type];
+    addB.textContent = `+ Add ${addLabel} Clip`;
     addB.addEventListener('click', () => {
       location.href = `edit.html?player_id=${p.id}&type=${type}`;
     });

@@ -131,6 +131,7 @@ a { color: var(--accent-2); }
 }
 .tag.walkup { color: var(--accent-2); border-color: var(--accent-2); }
 .tag.homerun { color: var(--accent); border-color: var(--accent); }
+.tag.walkout { color: #c084fc; border-color: #c084fc; }
 .tag.active { color: var(--ok); border-color: var(--ok); }
 
 /* ---------- kiosk grid (index) ---------- */
@@ -184,6 +185,19 @@ a { color: var(--accent-2); }
   min-width: 84px;
   font-size: 34px;
   font-weight: 900;
+}
+
+#btn-pitchers {
+  flex: 0 0 auto;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  padding: 10px 14px;
+}
+#btn-pitchers.on {
+  background: #1d4ed8;
+  border-color: var(--accent-2);
+  color: #fff;
 }
 
 #btn-bt {

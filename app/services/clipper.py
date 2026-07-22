@@ -150,7 +150,7 @@ def _decode_pcm(path: str) -> array:
 
 def _analyze(job: dict, path: str) -> None:
     job["status"] = "processing"
-    snippet = float(db.get_setting("default_snippet_length", "12"))
+    snippet = float(db.get_setting("default_snippet_length", "30"))
     try:
         duration = _ffprobe_duration(path)
         job["duration_sec"] = round(duration, 3)

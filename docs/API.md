@@ -34,7 +34,8 @@ Browser playback backend: on `play`, clients play `audio_url` via HTMLAudioEleme
 - `GET /api/teams/{team_id}/players` → ordered by `sort_order`:
   `[{ "id", "team_id", "name", "jersey_number", "photo_url" | null, "sort_order",
       "absent": false,
-      "active_walkup_clip_id" | null, "active_homerun_clip_id" | null }]`
+      "active_walkup_clip_id" | null, "active_homerun_clip_id" | null,
+      "active_walkout_clip_id" | null }]`
 
   `absent: true` hides the player from the kiosk grid and phone list and skips
   them in next-batter, but they stay in the roster (admin always lists them).
@@ -46,9 +47,10 @@ Browser playback backend: on `play`, clients play `audio_url` via HTMLAudioEleme
 
 ## Clips
 
-Clip object:
+Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration,
+`walkout` = pitcher entrance/walk-out):
 ```json
-{ "id", "player_id", "type": "walkup"|"homerun", "is_active": true,
+{ "id", "player_id", "type": "walkup"|"homerun"|"walkout", "is_active": true,
   "source": "youtube"|"upload", "source_url": "...", "audio_url": "/media/clips/12.mp3",
   "duration_sec": 12.0, "trim_start_sec": 34.5, "trim_end_sec": 46.5,
   "fade_in_ms": 300, "fade_out_ms": 500, "volume_boost_db": 0.0, "created_at": "iso" }
@@ -75,7 +77,7 @@ Clip object:
 
 ## Playback
 
-- `POST /api/playback/play` `{ "player_id", "type" }` → state (plays active clip of that type; 404 if none; stops current first)
+- `POST /api/playback/play` `{ "player_id", "type" }` → state (plays active clip of that type — `walkup`|`homerun`|`walkout`; 404 if none; stops current first)
 - `POST /api/playback/play_clip` `{ "clip_id" }` → state
 - `POST /api/playback/stop` → state (halt ≤200ms)
 - `POST /api/playback/volume` `{ "volume": 0-100 }` → state (persisted to settings)
@@ -114,7 +116,7 @@ Status object:
 
 ## Settings
 
-- `GET /api/settings` → `{ "default_snippet_length": 12, "master_volume": 80, "audio_output": "auto", "mock_gpio": true }`
+- `GET /api/settings` → `{ "default_snippet_length": 30, "master_volume": 80, "audio_output": "auto", "mock_gpio": true }`
 - `PATCH /api/settings` partial of the above → settings
 
 ## GPIO / mock buttons

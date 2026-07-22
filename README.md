@@ -48,7 +48,7 @@ Do this at home, on Wi-Fi — YouTube imports need internet, and the field won't
 
 1. Open http://localhost:8080/admin.html — create your team, add players (names + jersey numbers), snap photos or upload them.
 2. For each player, paste a YouTube URL (or upload an mp3/m4a) and pick walk-up or home-run.
-3. BatterBox downloads the audio in the background and suggests the loudest 12-second window.
+3. BatterBox downloads the audio in the background and suggests the loudest 30-second window.
 4. Open the trim editor: drag the start/end handles on the waveform, preview, set fade in/out and volume boost if a track is quieter than the rest.
 5. Save. The clip is sliced, faded, loudness-normalized, and live on the grid.
 6. Set the batting order by dragging tiles in admin.
