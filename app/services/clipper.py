@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 import uuid
 from array import array
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,20 @@ _jobs: dict[str, dict] = {}
 
 PEAK_BUCKETS = 800
 PCM_RATE = 8000  # mono s16le decode rate for analysis
+
+# Jobs are only needed between import and POST /api/clips|/api/hype; anything
+# this old is abandoned (or stuck). Evicting just drops the dict entry — the
+# source file stays on disk for clips that already reference it.
+JOB_TTL_SEC = 60 * 60
+
+
+def _evict_stale_jobs() -> None:
+    cutoff = time.monotonic() - JOB_TTL_SEC
+    stale = [jid for jid, j in _jobs.items() if j["created_mono"] < cutoff]
+    for jid in stale:
+        del _jobs[jid]
+    if stale:
+        log.info("evicted %d stale import job(s)", len(stale))
 
 
 class JobError(Exception):
@@ -59,12 +74,14 @@ def job_public(job: dict) -> dict:
 
 
 def _new_job(source: str, source_url: str | None) -> dict:
+    _evict_stale_jobs()
     job = {
         "job_id": uuid.uuid4().hex[:12],
         "status": "pending",
         "detail": "",
         "source": source,
         "source_url": source_url,
+        "created_mono": time.monotonic(),
     }
     _jobs[job["job_id"]] = job
     return job
