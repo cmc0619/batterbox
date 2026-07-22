@@ -66,8 +66,8 @@ def _evict_stale_jobs() -> None:
         path = job.get("source_path")
         if not path or not os.path.exists(path):
             continue
-        if db.source_file_referenced(os.path.basename(path)):
-            continue  # a saved clip still re-edits from this source
+        if db.source_protected(os.path.basename(path)):
+            continue  # a saved clip re-edits from it, or a render is in flight
         try:
             os.remove(path)
         except OSError:
@@ -583,30 +583,40 @@ def create_clip(
     )
     # Render BEFORE inserting the row: renders take seconds, and a row that
     # exists before its mp3 does is playable-but-404 on every client (and a
-    # crash mid-render would leave it behind permanently).
-    tmp = _render_to_temp(
-        src, "clips", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
-    )
-    clip_id = db.insert_clip(
-        player_id=player_id,
-        clip_type=clip_type,
-        source=job["source"],
-        source_url=job["source_url"],
-        duration_sec=duration,
-        trim_start_sec=trim_start_sec,
-        trim_end_sec=trim_end_sec,
-        fade_in_ms=fade_in_ms,
-        fade_out_ms=fade_out_ms,
-        volume_boost_db=volume_boost_db,
-        source_file=os.path.basename(src),
-    )
+    # crash mid-render would leave it behind permanently). Mark the source
+    # in-use across that window so a concurrent delete/eviction can't unlink
+    # it (no row references it yet) and leave a dangling source_file.
+    src_name = os.path.basename(src)
+    db.mark_source_in_use(src_name)
     try:
-        os.replace(tmp, os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3"))
-    except Exception:
-        db.delete_clip(clip_id)
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
+        tmp = _render_to_temp(
+            src, "clips", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
+        )
+        clip_id = db.insert_clip(
+            player_id=player_id,
+            clip_type=clip_type,
+            source=job["source"],
+            source_url=job["source_url"],
+            duration_sec=duration,
+            trim_start_sec=trim_start_sec,
+            trim_end_sec=trim_end_sec,
+            fade_in_ms=fade_in_ms,
+            fade_out_ms=fade_out_ms,
+            volume_boost_db=volume_boost_db,
+            source_file=src_name,
+        )
+        try:
+            os.replace(tmp, os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3"))
+        except Exception:
+            # Keep the source: the job is still `done`, so a retry can
+            # re-render from it. Deleting it here (M4 cascade) would 500 the
+            # retry in _probe_source.
+            db.delete_clip(clip_id, remove_source=False)
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
+    finally:
+        db.release_source_in_use(src_name)
     return db.get_clip(clip_id)
 
 
@@ -627,26 +637,31 @@ def create_hype(
     duration = _validate_trim(
         src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
     )
-    tmp = _render_to_temp(
-        src, "hype", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
-    )
-    hype_id = db.insert_hype(
-        title=title,
-        source=job["source"],
-        source_url=job["source_url"],
-        duration_sec=duration,
-        trim_start_sec=trim_start_sec,
-        trim_end_sec=trim_end_sec,
-        fade_in_ms=fade_in_ms,
-        fade_out_ms=fade_out_ms,
-        volume_boost_db=volume_boost_db,
-        source_file=os.path.basename(src),
-    )
+    src_name = os.path.basename(src)
+    db.mark_source_in_use(src_name)
     try:
-        os.replace(tmp, os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3"))
-    except Exception:
-        db.delete_hype(hype_id)
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
+        tmp = _render_to_temp(
+            src, "hype", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
+        )
+        hype_id = db.insert_hype(
+            title=title,
+            source=job["source"],
+            source_url=job["source_url"],
+            duration_sec=duration,
+            trim_start_sec=trim_start_sec,
+            trim_end_sec=trim_end_sec,
+            fade_in_ms=fade_in_ms,
+            fade_out_ms=fade_out_ms,
+            volume_boost_db=volume_boost_db,
+            source_file=src_name,
+        )
+        try:
+            os.replace(tmp, os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3"))
+        except Exception:
+            db.delete_hype(hype_id, remove_source=False)
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
+    finally:
+        db.release_source_in_use(src_name)
     return db.get_hype(hype_id)
