@@ -102,13 +102,37 @@ Target: Raspberry Pi OS 64-bit (Bookworm or later), Pi 4 or 5 recommended.
 
    Either way the kiosk script waits for the app to answer on port 8080, then opens Chromium full-screen. Audio plays through the browser out the 3.5mm jack / HDMI / USB DAC — plug your speaker/PA into the Pi.
 
-4. **Wi-Fi hotspot** (phones in the dugout): configure the Pi as a hotspot — NetworkManager makes this one command:
+4. **Networking at the field** — two ways to get phones and the Pi on the same network:
+
+   **Option A — Pi joins your iPhone's hotspot (recommended; the Pi gets internet too).** Turn on the iPhone's Personal Hotspot (Settings → Personal Hotspot; also enable *Maximize Compatibility* — that keeps it on 2.4GHz, which the Pi's Wi-Fi prefers). Then, once, on the Pi:
+
+   ```bash
+   sudo nmcli device wifi connect "Your iPhone Name" password "your-hotspot-password"
+   ```
+
+   The Pi remembers the network and rejoins automatically. Side effect: the Pi has real internet through the phone — YouTube imports and the yt-dlp auto-update keep working at the field.
+
+   **Option B — Pi runs its own hotspot (fully offline).** No internet anywhere; good when there's no cell signal:
 
    ```bash
    sudo nmcli device wifi hotspot ifname wlan0 ssid BatterBox password "take me out to the ballgame"
    ```
 
-   Phones join the `BatterBox` network and browse to the Pi's IP (typically `http://10.42.0.1:8080` — check with `ip addr show wlan0`). The grid and admin pages work fine on a phone screen.
+5. **Find the Pi by name, not IP (mDNS/Bonjour).** Raspberry Pi OS ships with Avahi, which broadcasts the Pi's hostname as `<hostname>.local` — no app-side work needed. Set the hostname once:
+
+   ```bash
+   sudo hostnamectl set-hostname batterbox   # then reboot
+   ```
+
+   With the Pi compose override the app answers on port 80, so from any phone on the same network:
+
+   ```
+   http://batterbox.local
+   ```
+
+   That's it — no port, no IP. (iPhone, Android, Mac, and Windows all resolve `.local`; a bare `http://batterbox` often works too, but `.local` is the guaranteed form. Bookmark it on the dugout phones.) Optional: `sudo cp kiosk/avahi/batterbox.service /etc/avahi/services/` to make BatterBox show up in Bonjour service browsers as well.
+
+   If a phone can't resolve the name, fall back to the Pi's IP: `ip addr show wlan0` on the Pi (typically `http://10.42.0.1` in option B). The grid and admin pages work fine on a phone screen.
 
 ### Audio: browser vs server backend
 
