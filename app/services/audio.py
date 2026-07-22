@@ -53,7 +53,11 @@ class WSManager:
 
 ws_manager = WSManager()
 
-_lock = threading.RLock()
+_lock = threading.RLock()  # guards _state / _mpv_proc / _mpv_ipc reads+writes
+# Serializes complete play/stop transitions. Without it, two overlapping play
+# requests can interleave stop/start and leave an untracked mpv process
+# playing over the PA that STOP can no longer reach.
+_op_lock = threading.Lock()
 _mpv_proc: subprocess.Popen | None = None
 _mpv_ipc: str | None = None
 
@@ -105,16 +109,19 @@ def _mpv_command(payload: dict) -> None:
         log.warning("mpv IPC failed: %s", e)
 
 
-def _server_play(clip: dict, subdir: str = "clips") -> None:
-    """Play a clip through mpv inside the container (Pi option)."""
+def _server_play(clip: dict, subdir: str = "clips") -> subprocess.Popen | None:
+    """Start mpv for a clip (Pi option). Returns the process, or None if it
+    could not start (warning already broadcast). Does NOT arm the EOF
+    watcher — the caller does that after broadcasting the play event, so an
+    instantly-exiting mpv can't emit its stop before the play."""
     global _mpv_proc, _mpv_ipc
     if shutil.which("mpv") is None:
         _warn("mpv not found; AUDIO_BACKEND=server requires mpv in the container")
-        return
+        return None
     audio_path = os.path.join(config.DATA_DIR, subdir, f"{clip['id']}.mp3")
     if not os.path.exists(audio_path):
         _warn(f"clip file missing: {audio_path}")
-        return
+        return None
     if os.name == "nt":
         ipc = r"\\.\pipe\batterbox-mpv"
     else:
@@ -136,16 +143,16 @@ def _server_play(clip: dict, subdir: str = "clips") -> None:
         cmd.append(f"--af=volume={boost}dB")
     cmd.append(audio_path)
     try:
-        _mpv_proc = subprocess.Popen(
+        proc = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        _mpv_ipc = ipc
-        threading.Thread(
-            target=_watch_mpv, args=(_mpv_proc,), daemon=True,
-            name="mpv-watcher",
-        ).start()
     except Exception as e:  # noqa: BLE001
         _warn(f"failed to start mpv: {e}")
+        return None
+    with _lock:
+        _mpv_proc = proc
+        _mpv_ipc = ipc
+    return proc
 
 
 def _watch_mpv(proc: subprocess.Popen) -> None:
@@ -173,8 +180,8 @@ def _watch_mpv(proc: subprocess.Popen) -> None:
 # ------------------------------------------------------------ operations
 
 
-def stop() -> dict:
-    """Halt playback immediately and broadcast a stop event."""
+def _halt() -> None:
+    """Tear down current playback and broadcast stop. Callers hold _op_lock."""
     global _mpv_proc, _mpv_ipc
     with _lock:
         proc = _mpv_proc
@@ -187,33 +194,58 @@ def stop() -> dict:
         except Exception:  # noqa: BLE001
             pass
     ws_manager.broadcast({"event": "stop"})
+
+
+def stop() -> dict:
+    """Halt playback immediately and broadcast a stop event."""
+    with _op_lock:
+        _halt()
+    return get_state()
+
+
+def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
+    """One complete, serialized play transition: stop whatever is playing,
+    start the new clip, commit state, broadcast, arm the EOF watcher.
+    Without _op_lock two overlapping plays can interleave and orphan an mpv
+    process that STOP can no longer reach."""
+    with _op_lock:
+        _halt()
+        proc = None
+        if config.AUDIO_BACKEND == "server":
+            proc = _server_play(row, subdir)
+            if proc is None:
+                # mpv could not start: stay idle honestly (warning already
+                # broadcast) instead of reporting a playback that isn't
+                # happening — a stuck "playing" state never clears itself.
+                return get_state()
+        with _lock:
+            _state.update(
+                status="playing",
+                clip_id=row["id"],
+                player_id=player_id,
+                type=ctype,
+                audio_warning=None,
+            )
+        ws_manager.broadcast(
+            {
+                "event": "play",
+                "clip_id": row["id"],
+                "player_id": player_id,
+                "type": ctype,
+                "audio_url": row["audio_url"],
+                "volume": int(db.get_setting("master_volume", "80")),
+                "volume_boost_db": row["volume_boost_db"] or 0.0,
+            }
+        )
+        if proc is not None:
+            threading.Thread(
+                target=_watch_mpv, args=(proc,), daemon=True, name="mpv-watcher"
+            ).start()
     return get_state()
 
 
 def _play_clip_row(clip: dict) -> dict:
-    stop()  # playing always stops the current clip first
-    with _lock:
-        _state.update(
-            status="playing",
-            clip_id=clip["id"],
-            player_id=clip["player_id"],
-            type=clip["type"],
-            audio_warning=None,
-        )
-    if config.AUDIO_BACKEND == "server":
-        _server_play(clip)
-    ws_manager.broadcast(
-        {
-            "event": "play",
-            "clip_id": clip["id"],
-            "player_id": clip["player_id"],
-            "type": clip["type"],
-            "audio_url": clip["audio_url"],
-            "volume": int(db.get_setting("master_volume", "80")),
-            "volume_boost_db": clip["volume_boost_db"] or 0.0,
-        }
-    )
-    return get_state()
+    return _start(clip, "clips", clip["player_id"], clip["type"])
 
 
 def play(player_id: int, clip_type: str) -> dict | None:
@@ -238,35 +270,15 @@ def play_hype(hype_id: int) -> dict | None:
     hype = db.get_hype(hype_id)
     if hype is None:
         return None
-    stop()  # playing always stops the current clip first
-    with _lock:
-        _state.update(
-            status="playing",
-            clip_id=hype["id"],
-            player_id=None,
-            type="hype",
-            audio_warning=None,
-        )
-    if config.AUDIO_BACKEND == "server":
-        _server_play(hype, subdir="hype")
-    ws_manager.broadcast(
-        {
-            "event": "play",
-            "clip_id": hype["id"],
-            "player_id": None,
-            "type": "hype",
-            "audio_url": hype["audio_url"],
-            "volume": int(db.get_setting("master_volume", "80")),
-            "volume_boost_db": hype["volume_boost_db"] or 0.0,
-        }
-    )
-    return get_state()
+    return _start(hype, "hype", None, "hype")
 
 
 def set_volume(volume: int) -> dict:
     volume = max(0, min(100, int(volume)))
     db.set_setting("master_volume", str(volume))
-    if config.AUDIO_BACKEND == "server" and _mpv_proc is not None:
+    with _lock:
+        has_proc = _mpv_proc is not None
+    if config.AUDIO_BACKEND == "server" and has_proc:
         _mpv_command({"command": ["set_property", "volume", volume]})
     ws_manager.broadcast({"event": "volume", "volume": volume})
     return get_state()
