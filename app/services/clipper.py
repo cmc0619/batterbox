@@ -321,18 +321,15 @@ def edit_context_hype(hype_id: int) -> dict:
     return _edit_context(db.get_hype_source_file(hype_id), "hype", db.get_hype(hype_id))
 
 
-def _render_to_file(
+def _validate_trim(
     src: str,
-    dst_dir: str,
-    item_id: int,
     trim_start_sec: float,
     trim_end_sec: float,
     fade_in_ms: int,
     fade_out_ms: int,
 ) -> float:
-    """Validate the trim against the source duration, then render to
-    DATA_DIR/<dst_dir>/<item_id>.mp3 via temp-file-then-move so a failed render
-    never leaves a half-written mp3. Returns the rendered duration."""
+    """Validate a trim against the source audio; returns the trimmed duration.
+    Raises JobError (client's fault → 400) or RenderError (source unreadable)."""
     if trim_start_sec < 0:
         raise JobError("trim_start_sec must be >= 0")
     if trim_end_sec <= trim_start_sec:
@@ -349,7 +346,24 @@ def _render_to_file(
         raise JobError(
             f"trim_end_sec exceeds source duration ({src_duration:.3f}s)"
         )
-    duration = round(trim_end_sec - trim_start_sec, 3)
+    return round(trim_end_sec - trim_start_sec, 3)
+
+
+def _render_to_file(
+    src: str,
+    dst_dir: str,
+    item_id: int,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+) -> float:
+    """Validate the trim against the source duration, then render to
+    DATA_DIR/<dst_dir>/<item_id>.mp3 via temp-file-then-move so a failed render
+    never leaves a half-written mp3. Returns the rendered duration."""
+    duration = _validate_trim(
+        src, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+    )
     dst = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.mp3")
     tmp = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.tmp.mp3")
     try:
@@ -432,9 +446,11 @@ def create_clip(
     volume_boost_db: float,
 ) -> dict:
     job, src = _done_job_source(job_id)
-    if trim_end_sec <= trim_start_sec:
-        raise JobError("trim_end_sec must be greater than trim_start_sec")
-    duration = round(trim_end_sec - trim_start_sec, 3)
+    # Same validation as PATCH (incl. trim vs source duration) — fail fast
+    # with a clean 400 before touching the DB, not a 500 out of ffmpeg.
+    duration = _validate_trim(
+        src, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+    )
     is_first = db.count_clips(player_id, clip_type) == 0
     clip_id = db.insert_clip(
         player_id=player_id,
@@ -450,9 +466,10 @@ def create_clip(
         volume_boost_db=volume_boost_db,
         source_file=os.path.basename(src),
     )
-    dst = os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3")
     try:
-        _render(src, dst, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
+        _render_to_file(
+            src, "clips", clip_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        )
     except Exception:
         db.delete_clip(clip_id)
         raise
@@ -472,9 +489,9 @@ def create_hype(
     title = title.strip()
     if not title or len(title) > 80:
         raise JobError("title must be 1–80 characters")
-    if trim_end_sec <= trim_start_sec:
-        raise JobError("trim_end_sec must be greater than trim_start_sec")
-    duration = round(trim_end_sec - trim_start_sec, 3)
+    duration = _validate_trim(
+        src, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+    )
     hype_id = db.insert_hype(
         title=title,
         source=job["source"],
@@ -487,9 +504,10 @@ def create_hype(
         volume_boost_db=volume_boost_db,
         source_file=os.path.basename(src),
     )
-    dst = os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3")
     try:
-        _render(src, dst, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
+        _render_to_file(
+            src, "hype", hype_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        )
     except Exception:
         db.delete_hype(hype_id)
         raise
