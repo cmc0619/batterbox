@@ -543,6 +543,81 @@ btBtn.addEventListener('click', async () => {
 });
 setInterval(refreshBt, 5000);
 
+/* ---------------- Wi-Fi hotspot ---------------- */
+
+const wifiStatusEl = document.getElementById('wifi-status');
+const wifiSsidEl = document.getElementById('wifi-ssid');
+const wifiPassEl = document.getElementById('wifi-password');
+let wifiFormTouched = false; // don't clobber typing with the 10s status poll
+wifiSsidEl.addEventListener('input', () => { wifiFormTouched = true; });
+wifiPassEl.addEventListener('input', () => { wifiFormTouched = true; });
+
+function renderWifi(s) {
+  wifiStatusEl.classList.remove('on', 'off');
+  if (!s.available) {
+    wifiStatusEl.textContent = `Wi-Fi control unavailable: ${s.detail}`;
+    wifiStatusEl.classList.add('off');
+  } else if (s.mode === 'hotspot') {
+    wifiStatusEl.textContent = s.detail; // "Hotspot ON — SSID '…' — join it and open …"
+    wifiStatusEl.classList.add('on');
+  } else {
+    wifiStatusEl.textContent = s.detail; // client mode / offline
+    wifiStatusEl.classList.add('off');
+  }
+}
+
+async function refreshWifi() {
+  try {
+    const s = await BB.api('/api/wifi/status');
+    if (!wifiFormTouched) {
+      wifiSsidEl.value = s.ssid ?? '';
+      wifiPassEl.value = s.password ?? '';
+    }
+    renderWifi(s);
+  } catch { /* backend older than this feature — leave last state */ }
+}
+
+document.getElementById('btn-wifi-save').addEventListener('click', async () => {
+  try {
+    const s = await BB.api('/api/wifi/settings', {
+      method: 'POST',
+      body: { ssid: wifiSsidEl.value.trim(), password: wifiPassEl.value },
+    });
+    wifiFormTouched = false;
+    renderWifi(s);
+    showBanner('Wi-Fi settings saved.', false);
+  } catch (err) { showBanner(err.message, false); }
+});
+
+document.getElementById('btn-wifi-start').addEventListener('click', async () => {
+  const ssid = wifiSsidEl.value.trim();
+  if (!confirm(`The Pi will leave the current Wi-Fi and broadcast '${ssid}'. This device will disconnect — join '${ssid}' and reopen http://batterbox.local. Continue?`)) return;
+  try {
+    const s = await BB.api('/api/wifi/hotspot', {
+      method: 'POST',
+      body: { ssid, password: wifiPassEl.value },
+    });
+    wifiFormTouched = false;
+    renderWifi(s);
+    showBanner(s.detail, false);
+  } catch (err) {
+    showBanner(err.message, false);
+    refreshWifi();
+  }
+});
+
+document.getElementById('btn-wifi-stop').addEventListener('click', async () => {
+  try {
+    const s = await BB.api('/api/wifi/hotspot/off', { method: 'POST' });
+    renderWifi(s);
+    showBanner(s.detail, false);
+  } catch (err) {
+    showBanner(err.message, false);
+    refreshWifi();
+  }
+});
+setInterval(refreshWifi, 10000);
+
 /* ---------------- WebSocket (volume sync for mock GPIO) ---------------- */
 
 BB.on('warning', (msg) => showBanner(msg.message, false));
@@ -552,6 +627,7 @@ BB.on('warning', (msg) => showBanner(msg.message, false));
 (async () => {
   BB.connect();
   refreshBt();
+  refreshWifi();
   try {
     await loadTeams();
     await loadPlayers();

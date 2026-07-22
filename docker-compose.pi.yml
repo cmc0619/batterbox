@@ -18,9 +18,10 @@ services:
       # ALSA sound card for server-side playback via mpv.
       - /dev/snd:/dev/snd
     volumes:
-      # Host BlueZ D-Bus socket so bluetoothctl in the container can drive the
-      # Pi's Bluetooth adapter (kiosk speaker pairing). Requires the host's
-      # bluetooth service running — Raspberry Pi OS provides it by default.
+      # Host system D-Bus socket so the container can drive host services:
+      # bluetoothctl → BlueZ (kiosk speaker pairing) and nmcli → NetworkManager
+      # (admin Wi-Fi hotspot). Requires the host's bluetooth and
+      # NetworkManager services running — Raspberry Pi OS provides both by default.
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
     environment:
       MOCK_GPIO: "false"

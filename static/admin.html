@@ -40,6 +40,25 @@
     </div>
   </section>
 
+  <section class="section" id="wifi-section">
+    <h2>Wi-Fi Hotspot</h2>
+    <p id="wifi-status" class="wifi-status">Wi-Fi status: loading…</p>
+    <div class="form-row active-team-row">
+      <label for="wifi-ssid">SSID:</label>
+      <input id="wifi-ssid" autocomplete="off" maxlength="32" autocapitalize="off" spellcheck="false">
+    </div>
+    <div class="form-row active-team-row">
+      <label for="wifi-password">Password:</label>
+      <input id="wifi-password" autocomplete="off" maxlength="63" autocapitalize="off" spellcheck="false">
+    </div>
+    <p class="wifi-hint">Password shown in plain text so you can read it aloud — 8–63 characters. The Pi leaves its current Wi-Fi when the hotspot starts.</p>
+    <div class="form-row">
+      <button type="button" class="btn-primary" id="btn-wifi-save">Save Settings</button>
+      <button type="button" class="btn-ok" id="btn-wifi-start">Start Hotspot</button>
+      <button type="button" class="btn-danger" id="btn-wifi-stop">Stop Hotspot</button>
+    </div>
+  </section>
+
   <section class="section" id="players-section">
     <h2>Players — <span id="players-team-name">…</span></h2>
     <p style="color:var(--dim); font-size:18px; margin:0 0 10px;">
