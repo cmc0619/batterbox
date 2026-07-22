@@ -51,11 +51,12 @@
       <label for="wifi-password">Password:</label>
       <input id="wifi-password" autocomplete="off" maxlength="63" autocapitalize="off" spellcheck="false">
     </div>
-    <p class="wifi-hint">Password shown in plain text so you can read it aloud — 8–63 characters. The Pi leaves its current Wi-Fi when the hotspot starts.</p>
+    <p class="wifi-hint">Password shown in plain text so you can read it aloud — 8–63 characters (blank = open network). One box, two directions: <b>Start Hotspot</b> broadcasts this SSID; <b>Use Wi-Fi</b> joins the network with this SSID/password. Either way the Pi leaves its current network.</p>
     <div class="form-row">
       <button type="button" class="btn-primary" id="btn-wifi-save">Save Settings</button>
       <button type="button" class="btn-ok" id="btn-wifi-start">Start Hotspot</button>
       <button type="button" class="btn-danger" id="btn-wifi-stop">Stop Hotspot</button>
+      <button type="button" id="btn-wifi-client">Use Wi-Fi</button>
     </div>
   </section>
 

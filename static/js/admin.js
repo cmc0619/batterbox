@@ -618,6 +618,22 @@ document.getElementById('btn-wifi-stop').addEventListener('click', async () => {
     refreshWifi();
   }
 });
+document.getElementById('btn-wifi-client').addEventListener('click', async () => {
+  const ssid = wifiSsidEl.value.trim();
+  if (!confirm(`The Pi will join '${ssid}' as a client (the hotspot, if on, will stop). This device will disconnect unless it's also on '${ssid}' — reopen http://batterbox.local there. Continue?`)) return;
+  try {
+    const s = await BB.api('/api/wifi/client', {
+      method: 'POST',
+      body: { ssid, password: wifiPassEl.value },
+    });
+    wifiFormTouched = false;
+    renderWifi(s);
+    showBanner(s.detail, false);
+  } catch (err) {
+    showBanner(err.message, false);
+    refreshWifi();
+  }
+});
 setInterval(refreshWifi, 10000);
 
 /* ---------------- WebSocket (volume sync for mock GPIO) ---------------- */

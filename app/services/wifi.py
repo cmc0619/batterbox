@@ -220,6 +220,46 @@ def enable_hotspot(ssid: str, password: str) -> tuple[dict, str | None]:
     return status, err
 
 
+def connect_client(ssid: str, password: str) -> tuple[dict, str | None]:
+    """Join an existing network as a client ("Use Wi-Fi" — the same SSID/password
+    box as the hotspot, pointed the other way). Drops the batterbox hotspot first
+    if it's up — one radio can't be AP and client at once. An empty password
+    means an open network (no password arg passed to nmcli)."""
+    ssid = (ssid or "").strip()
+    if not 1 <= len(ssid) <= 32:
+        return get_status(), "SSID must be 1–32 characters"
+    if password:  # empty = open network; otherwise WPA2 rules apply
+        try:
+            _validate(ssid, password)
+        except ValueError as e:
+            return get_status(), str(e)
+    available, detail = _detect()
+    if not available:
+        return get_status(), detail
+    db.set_setting("wifi_ssid", ssid)
+    db.set_setting("wifi_password", password)
+    ok, out = _run(["connection", "down", "id", HOTSPOT_CON_NAME])
+    if not ok:
+        log.info("hotspot was not active before client connect (%s)", out)
+    args = ["device", "wifi", "connect", ssid, "ifname", IFNAME]
+    if password:
+        args += ["password", password]
+    ok, out = _run(args, timeout=_ENABLE_TIMEOUT)
+    status = get_status()
+    if ok:
+        log.info("Wi-Fi client connected to '%s' on %s", ssid, IFNAME)
+        status["detail"] = (
+            f"Joined '{ssid}' as a client"
+            + (f" ({status['ip']})" if status["ip"] else "")
+            + f". Admin devices must be on '{ssid}' too — open http://batterbox.local."
+        )
+        return status, None
+    err = f"nmcli connect failed: {out or 'no response from nmcli'}"
+    log.warning(err)
+    status["detail"] = err
+    return status, err
+
+
 def disable_hotspot() -> tuple[dict, str | None]:
     """Take the hotspot down. NetworkManager rejoins any remembered client
     network (e.g. the iPhone) on its own; detail notes when none came up."""
