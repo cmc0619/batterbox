@@ -414,6 +414,30 @@ def _item_lock(dst_dir: str, item_id: int) -> threading.Lock:
         return _item_locks.setdefault((dst_dir, item_id), threading.Lock())
 
 
+def _render_to_temp(
+    src: str,
+    dst_dir: str,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    duration: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+) -> str:
+    """Render a validated trim to a uniquely-named temp file in dst_dir and
+    return its path (same filesystem as the final name, so os.replace stays
+    atomic). Caller renames it onto <id>.mp3 once the row exists."""
+    tmp = os.path.join(
+        config.DATA_DIR, dst_dir, f"new.{uuid.uuid4().hex[:8]}.tmp.mp3"
+    )
+    try:
+        _render(src, tmp, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return tmp
+
+
 def _render_to_file(
     src: str,
     dst_dir: str,
@@ -528,11 +552,15 @@ def create_clip(
     duration = _validate_trim(
         src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
     )
-    is_first = db.count_clips(player_id, clip_type) == 0
+    # Render BEFORE inserting the row: renders take seconds, and a row that
+    # exists before its mp3 does is playable-but-404 on every client (and a
+    # crash mid-render would leave it behind permanently).
+    tmp = _render_to_temp(
+        src, "clips", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
+    )
     clip_id = db.insert_clip(
         player_id=player_id,
         clip_type=clip_type,
-        is_active=is_first,  # first clip of player+type becomes active
         source=job["source"],
         source_url=job["source_url"],
         duration_sec=duration,
@@ -544,12 +572,11 @@ def create_clip(
         source_file=os.path.basename(src),
     )
     try:
-        _render_to_file(
-            src, "clips", clip_id, trim_start_sec, trim_end_sec,
-            fade_in_ms, fade_out_ms, src_duration=src_duration,
-        )
+        os.replace(tmp, os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3"))
     except Exception:
         db.delete_clip(clip_id)
+        if os.path.exists(tmp):
+            os.remove(tmp)
         raise
     return db.get_clip(clip_id)
 
@@ -571,6 +598,9 @@ def create_hype(
     duration = _validate_trim(
         src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
     )
+    tmp = _render_to_temp(
+        src, "hype", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
+    )
     hype_id = db.insert_hype(
         title=title,
         source=job["source"],
@@ -584,11 +614,10 @@ def create_hype(
         source_file=os.path.basename(src),
     )
     try:
-        _render_to_file(
-            src, "hype", hype_id, trim_start_sec, trim_end_sec,
-            fade_in_ms, fade_out_ms, src_duration=src_duration,
-        )
+        os.replace(tmp, os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3"))
     except Exception:
         db.delete_hype(hype_id)
+        if os.path.exists(tmp):
+            os.remove(tmp)
         raise
     return db.get_hype(hype_id)
