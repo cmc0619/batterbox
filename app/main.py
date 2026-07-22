@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
@@ -55,6 +56,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# A hair above the 50MB upload cap to allow multipart framing overhead. This
+# rejects an oversized declared body BEFORE Starlette parses the multipart and
+# spools it to a temp file — the per-handler file.read(cap+1) only bounds
+# memory after that. Chunked uploads (no Content-Length) skip this check and
+# rely on the handler cap; a real reverse proxy (nginx client_max_body_size /
+# Caddy request_body) is the belt-and-suspenders for those, but there's no
+# proxy in front of this appliance.
+MAX_REQUEST_BYTES = 55 * 1024 * 1024
+
+
+@app.middleware("http")
+async def body_size_limit_middleware(request, call_next):
+    cl = request.headers.get("content-length")
+    if cl is not None:
+        try:
+            if int(cl) > MAX_REQUEST_BYTES:
+                return JSONResponse(
+                    {"detail": "request body too large"}, status_code=413
+                )
+        except ValueError:
+            return JSONResponse({"detail": "invalid Content-Length"}, status_code=400)
+    return await call_next(request)
 
 
 @app.middleware("http")
