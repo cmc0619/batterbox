@@ -60,8 +60,10 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
 ```
 
 - `GET /api/players/{id}/clips` → `[clip]`
-- `POST /api/clips/import/youtube` `{ "player_id", "type", "url" }` → `{ "job_id" }` (async)
+- `POST /api/clips/import/youtube` `{ "player_id", "type", "url" }` → `{ "job_id" }` (async; single video only — playlists are not expanded; downloads are size-capped at 50MB)
 - `POST /api/clips/import/upload?player_id=1&type=walkup` multipart `file` (mp3/m4a, ≤50MB) → `{ "job_id" }` (async)
+
+  Import limits (both endpoints, and the hype equivalents): sources longer than **30 minutes** fail analysis with a clear job error (decoded PCM of unbounded sources can exhaust Pi memory), and at most **8 imports** may be pending/processing at once — the 9th returns **429** with detail.
 - `GET /api/jobs/{job_id}` →
   `{ "job_id", "status": "pending"|"processing"|"done"|"error", "detail": "",
      "duration_sec": 213.4, "suggested_start": 34.0, "suggested_end": 46.0,
