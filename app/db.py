@@ -587,6 +587,21 @@ def insert_clip(
         return cur.lastrowid
 
 
+def source_file_referenced(basename: str) -> bool:
+    """True if any clip or hype row still points at sources/<basename>."""
+    with _lock:
+        conn = get_conn()
+        clip = conn.execute(
+            "SELECT 1 FROM clips WHERE source_file = ? LIMIT 1", (basename,)
+        ).fetchone()
+        if clip:
+            return True
+        hype = conn.execute(
+            "SELECT 1 FROM hype WHERE source_file = ? LIMIT 1", (basename,)
+        ).fetchone()
+        return hype is not None
+
+
 def get_clip_source_file(clip_id: int) -> str | None:
     """Internal: relative filename of the clip's full-length source in sources/."""
     with _lock:
