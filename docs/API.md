@@ -45,7 +45,7 @@ Browser playback backend: on `play`, clients play `audio_url` via HTMLAudioEleme
 - `POST /api/teams/{team_id}/players` `{ "name", "jersey_number" }` → player
 - `PATCH /api/players/{id}` `{ "name"?, "jersey_number"?, "absent"? }` → player
 - `DELETE /api/players/{id}` → 204 (cascades clips + files)
-- `POST /api/teams/{team_id}/players/reorder` `{ "player_ids": [..] }` → 204 (sets sort_order by array position)
+- `POST /api/teams/{team_id}/players/reorder` `{ "player_ids": [..] }` → 204 (sets sort_order by array position). `player_ids` must be the team's **complete** roster, each id exactly once — otherwise 400 and no order change (a partial list would silently corrupt the order of omitted players).
 - `POST /api/players/{id}/photo` multipart `file` (jpg/png, ≤5MB) → `{ "photo_url" }`
 
 ## Clips
