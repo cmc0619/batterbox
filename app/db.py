@@ -341,14 +341,11 @@ def update_team(team_id: int, name: str) -> dict | None:
 def delete_team(team_id: int) -> bool:
     with _lock:
         conn = get_conn()
-        clip_ids = [
-            r["id"]
-            for r in conn.execute(
-                "SELECT c.id FROM clips c JOIN players p ON c.player_id = p.id"
-                " WHERE p.team_id = ?",
-                (team_id,),
-            )
-        ]
+        clips = conn.execute(
+            "SELECT c.id, c.source_file FROM clips c JOIN players p ON c.player_id = p.id"
+            " WHERE p.team_id = ?",
+            (team_id,),
+        ).fetchall()
         photos = [
             r["photo_url"]
             for r in conn.execute(
@@ -361,17 +358,34 @@ def delete_team(team_id: int) -> bool:
             conn.execute("DELETE FROM settings WHERE key = 'active_team_id'")
         conn.commit()
     if cur.rowcount:
-        _remove_files(clip_ids, photos)
+        _remove_files(
+            [c["id"] for c in clips],
+            photos,
+            [c["source_file"] for c in clips if c["source_file"]],
+        )
     return cur.rowcount > 0
 
 
-def _remove_files(clip_ids: list[int], photo_urls: list[str]) -> None:
+def _remove_files(
+    clip_ids: list[int],
+    photo_urls: list[str],
+    source_files: list[str] | None = None,
+) -> None:
     for cid in clip_ids:
         path = os.path.join(config.DATA_DIR, "clips", f"{cid}.mp3")
         if os.path.exists(path):
             os.remove(path)
     for url in photo_urls:
         path = os.path.join(config.DATA_DIR, "photos", os.path.basename(url))
+        if os.path.exists(path):
+            os.remove(path)
+    # Trim sources leak forever otherwise (roster churn grows the volume
+    # unbounded). Called AFTER the rows are deleted, so the reference check
+    # sees only surviving clips/hype — a source shared with them is kept.
+    for name in source_files or []:
+        if not name or source_file_referenced(name):
+            continue
+        path = os.path.join(config.DATA_DIR, "sources", os.path.basename(name))
         if os.path.exists(path):
             os.remove(path)
 
@@ -470,14 +484,17 @@ def delete_player(player_id: int) -> bool:
         ).fetchone()
         if row is None:
             return False
-        clip_ids = [
-            r["id"]
-            for r in conn.execute("SELECT id FROM clips WHERE player_id = ?", (player_id,))
-        ]
+        clips = conn.execute(
+            "SELECT id, source_file FROM clips WHERE player_id = ?", (player_id,)
+        ).fetchall()
         conn.execute("DELETE FROM players WHERE id = ?", (player_id,))
         conn.commit()
     photos = [row["photo_url"]] if row["photo_url"] else []
-    _remove_files(clip_ids, photos)
+    _remove_files(
+        [c["id"] for c in clips],
+        photos,
+        [c["source_file"] for c in clips if c["source_file"]],
+    )
     return True
 
 
@@ -655,10 +672,13 @@ def activate_clip(clip_id: int) -> None:
 def delete_clip(clip_id: int) -> bool:
     with _lock:
         conn = get_conn()
+        row = conn.execute(
+            "SELECT source_file FROM clips WHERE id = ?", (clip_id,)
+        ).fetchone()
         cur = conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
         conn.commit()
     if cur.rowcount:
-        _remove_files([clip_id], [])
+        _remove_files([clip_id], [], [row["source_file"]] if row else [])
     return cur.rowcount > 0
 
 
@@ -770,10 +790,14 @@ def update_hype_trim(
 def delete_hype(hype_id: int) -> bool:
     with _lock:
         conn = get_conn()
+        row = conn.execute(
+            "SELECT source_file FROM hype WHERE id = ?", (hype_id,)
+        ).fetchone()
         cur = conn.execute("DELETE FROM hype WHERE id = ?", (hype_id,))
         conn.commit()
     if cur.rowcount:
         path = os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3")
         if os.path.exists(path):
             os.remove(path)
+        _remove_files([], [], [row["source_file"]] if row else [])
     return cur.rowcount > 0
