@@ -140,8 +140,26 @@ def _server_play(clip: dict, subdir: str = "clips") -> None:
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         _mpv_ipc = ipc
+        threading.Thread(
+            target=_watch_mpv, args=(_mpv_proc,), daemon=True,
+            name="mpv-watcher",
+        ).start()
     except Exception as e:  # noqa: BLE001
         _warn(f"failed to start mpv: {e}")
+
+
+def _watch_mpv(proc: subprocess.Popen) -> None:
+    """Clear "playing" state when mpv reaches end of file on its own.
+
+    The browser backend clears state via the client's `ended` handler; the
+    server backend has no client to do that, so without this the state (and
+    every kiosk's playing indicator) would stick until the next play/stop.
+    """
+    proc.wait()
+    with _lock:
+        finished_naturally = _mpv_proc is proc
+    if finished_naturally:
+        stop()
 
 
 # ------------------------------------------------------------ operations
