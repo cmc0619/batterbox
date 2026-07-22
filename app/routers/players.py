@@ -45,6 +45,15 @@ def delete_player(player_id: int):
 def reorder_players(team_id: int, body: PlayersReorder):
     if db.get_team(team_id) is None:
         raise HTTPException(404, f"team {team_id} not found")
+    roster_ids = {p["id"] for p in db.list_players(team_id)}
+    if len(body.player_ids) != len(set(body.player_ids)) or set(
+        body.player_ids
+    ) != roster_ids:
+        # A partial or foreign list would silently leave stale sort_order
+        # on the players it omits.
+        raise HTTPException(
+            400, "player_ids must contain every player of the team exactly once"
+        )
     db.reorder_players(team_id, body.player_ids)
     return Response(status_code=204)
 

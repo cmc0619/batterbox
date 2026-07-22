@@ -26,6 +26,9 @@
 - [x] 5. README documents Pi deploy incl. kiosk autostart + hotspot notes
 - [x] 6. Walter Walkup on screen. Headphones, cap, mustache. Present and animating.
 
+## Done (continued 2)
+- [x] Hardening pass (2026-07-22): `/media` now mounts only the four media subdirs (clips/photos/hype/sources) so the SQLite DB and mpv socket at the volume root are no longer downloadable; server-backend (mpv) playback clears "playing" state on natural end-of-file via a process watcher thread (browser backend already did this through the client `ended` handler); import jobs evicted from memory after 1h (dict entry only — source files stay for re-edit); roster reorder validates the id list is the complete team exactly once (400 otherwise, preventing silent sort_order corruption from partial lists).
+
 ## Pending scope notes
 - Multiple teams, >15 players (paged 5×3 grid), multiple clips per player (walkup tap / homerun long-press 600ms), touch drag-drop reorder — all implemented.
 - Dev data note: ./data currently holds two demo clips for Bobby 'Rocket' Reyes (walkup 12s, homerun 8s, from "Me at the zoo") — delete via admin UI if unwanted.
