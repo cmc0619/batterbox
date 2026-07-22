@@ -66,16 +66,32 @@ async function resolvePlayerName(pid) {
 
 /* ---------------- import + job polling ---------------- */
 
+// Debounce trap: on a touchscreen a double-tap of IMPORT would fire two
+// jobs. Buttons stay disabled from tap until the job settles, and the URL
+// box is cleared once the job is accepted so a stray extra tap has nothing
+// to re-import.
+function setImportBusy(busy) {
+  document.getElementById('btn-yt').disabled = busy;
+  document.getElementById('btn-upload').disabled = busy;
+}
+
 async function startJob(promise) {
+  setImportBusy(true);
   try {
     const { job_id } = await promise;
     jobId = job_id;
+    document.getElementById('yt-url').value = '';
+    pollFailures = 0;
     setJobStatus('Job queued…');
     pollJob();
   } catch (err) {
     setJobStatus(`Import failed: ${err.message}`, true);
+    setImportBusy(false);
   }
 }
+
+let pollFailures = 0;
+const MAX_POLL_FAILURES = 5;
 
 function pollJob() {
   if (pollTimer) clearTimeout(pollTimer);
@@ -83,15 +99,27 @@ function pollJob() {
     let job;
     try {
       job = await BB.api(`/api/jobs/${jobId}`);
+      pollFailures = 0;
     } catch (err) {
+      // One dropped request on flaky dugout Wi-Fi must not kill the poll
+      // (and leave the import buttons disabled forever).
+      pollFailures += 1;
+      if (pollFailures < MAX_POLL_FAILURES) {
+        setJobStatus(`Job poll hiccup (retry ${pollFailures}/${MAX_POLL_FAILURES})…`);
+        pollJob();
+        return;
+      }
       setJobStatus(`Job poll failed: ${err.message}`, true);
+      setImportBusy(false);
       return;
     }
     if (job.status === 'done') {
       setJobStatus('Audio ready — trim below.');
+      setImportBusy(false);
       initEditor(job);
     } else if (job.status === 'error') {
       setJobStatus(`Import error: ${job.detail || 'unknown error'}`, true);
+      setImportBusy(false);
     } else {
       setJobStatus(job.status === 'processing' ? 'Processing audio…' : 'Job queued…');
       pollJob();
