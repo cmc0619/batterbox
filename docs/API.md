@@ -67,7 +67,7 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
      "duration_sec": 213.4, "suggested_start": 34.0, "suggested_end": 46.0,
      "source_audio_url": "/media/sources/abc.mp3", "peaks": [0.12, ...] }`
   (`peaks`: ~800 floats 0–1 for instant waveform render; `suggested_*` = loudest default_snippet_length window, fallback 0→length)
-- `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type)
+- `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type). Same trim validation as PATCH (`0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, fades ≥ 0) → 400 on violation, checked before anything is saved.
 - `GET /api/clips/{id}/edit_context` →
   `{ "clip": <clip object>, "source_audio_url": "/media/sources/abc.mp3", "duration_sec": 213.4, "peaks": [0.12, ...] }`
   (re-opens a saved clip in the trim editor; `duration_sec`/`peaks` describe the FULL source audio, like the job response).
@@ -93,7 +93,7 @@ Hype clip object:
 - `GET /api/hype` → `[hype clip]`
 - `POST /api/hype/import/youtube` `{ "title", "url" }` → `{ "job_id" }` (async, 202; same job pipeline / `GET /api/jobs/{job_id}` as player clips)
 - `POST /api/hype/import/upload?title=X` multipart `file` (mp3/m4a) → `{ "job_id" }` (async, 202)
-- `POST /api/hype` `{ "job_id", "title", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → hype clip (201; same ffmpeg slice + fades + loudnorm → 192k MP3 render as player clips)
+- `POST /api/hype` `{ "job_id", "title", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → hype clip (201; same ffmpeg slice + fades + loudnorm → 192k MP3 render as player clips). Same trim validation as PATCH → 400 on violation, checked before anything is saved.
 - `GET /api/hype/{id}/edit_context` → `{ "hype": <hype clip object>, "source_audio_url", "duration_sec", "peaks" }` — same shape as the player-clip version but with `"hype"` instead of `"clip"`. 404 if missing; 409 if no stored source / source file gone.
 - `PATCH /api/hype/{id}` `{ "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` (all required) → updated hype clip (re-renders from the stored source, temp-file-then-move, updates `duration_sec`). Same semantics/errors as player clips: 404 missing, 409 source gone, 400 on validation failure.
 - `DELETE /api/hype/{id}` → 204 (removes file)
