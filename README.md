@@ -163,7 +163,7 @@ All env vars, settable in `docker-compose.yml` / `.env` / shell:
 
 | Var             | Default   | What it does                                                            |
 | --------------- | --------- | ----------------------------------------------------------------------- |
-| `PORT`          | `8080`    | HTTP port                                                               |
+| `PORT`          | `8080`    | HTTP port inside the container (compose maps host ports onto it; the Pi override adds `80:8080` so phones browse with no port) |
 | `DATA_DIR`      | `/data`   | SQLite DB + clips/photos/sources (mounted to `./data` on the host)      |
 | `MOCK_GPIO`     | `true`    | `true` = keyboard/on-screen mock buttons; `false` = real GPIO (Pi)      |
 | `AUDIO_BACKEND` | `browser` | `browser` = clients play audio; `server` = mpv in-container to ALSA     |
@@ -179,9 +179,9 @@ Physical buttons call the same playback API as the touchscreen — one code path
 | Button      | BCM pin  | Physical pin |
 | ----------- | -------- | ------------ |
 | Stop        | GPIO 17  | 11           |
-| Next batter | GPIO 27  | 13           |
-| Volume up   | GPIO 22  | 15           |
-| Volume down | GPIO 23  | 16           |
+| Next batter | GPIO 23  | 16           |
+| Volume up   | GPIO 27  | 13           |
+| Volume down | GPIO 22  | 15           |
 | BT pairing LED (optional, via ~330Ω resistor) | GPIO 26 | 37 |
 
 `/dev/gpiomem` is mapped into the container by `docker-compose.pi.yml` — no privileged container needed. Keep wires away from the audio cable; GPIO noise on a cheap speaker wire sounds like a swarm of bees.

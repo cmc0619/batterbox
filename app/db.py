@@ -325,6 +325,11 @@ def create_team(name: str) -> dict:
         ).fetchone()["n"]
         cur = conn.execute("INSERT INTO teams (name, sort_order) VALUES (?, ?)", (name, nxt))
         conn.commit()
+    # The only team should always be the active one — otherwise the kiosk
+    # renders a grid (frontend falls back to the first team) while next-batter
+    # 404s with "no active team".
+    if get_active_team_id() is None:
+        set_active_team_id(cur.lastrowid)
     return get_team(cur.lastrowid)
 
 
@@ -341,14 +346,11 @@ def update_team(team_id: int, name: str) -> dict | None:
 def delete_team(team_id: int) -> bool:
     with _lock:
         conn = get_conn()
-        clip_ids = [
-            r["id"]
-            for r in conn.execute(
-                "SELECT c.id FROM clips c JOIN players p ON c.player_id = p.id"
-                " WHERE p.team_id = ?",
-                (team_id,),
-            )
-        ]
+        clips = conn.execute(
+            "SELECT c.id, c.source_file FROM clips c JOIN players p ON c.player_id = p.id"
+            " WHERE p.team_id = ?",
+            (team_id,),
+        ).fetchall()
         photos = [
             r["photo_url"]
             for r in conn.execute(
@@ -358,22 +360,59 @@ def delete_team(team_id: int) -> bool:
         ]
         cur = conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
         if get_active_team_id() == team_id:
-            conn.execute("DELETE FROM settings WHERE key = 'active_team_id'")
+            # Hand the active slot to the first remaining team instead of
+            # leaving it unset (kiosk would render a fallback team while
+            # next-batter fails with "no active team").
+            successor = conn.execute(
+                "SELECT id FROM teams ORDER BY sort_order, id LIMIT 1"
+            ).fetchone()
+            if successor:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES"
+                    " ('active_team_id', ?)",
+                    (str(successor["id"]),),
+                )
+            else:
+                conn.execute("DELETE FROM settings WHERE key = 'active_team_id'")
         conn.commit()
     if cur.rowcount:
-        _remove_files(clip_ids, photos)
+        _remove_files(
+            [c["id"] for c in clips],
+            photos,
+            [c["source_file"] for c in clips if c["source_file"]],
+        )
     return cur.rowcount > 0
 
 
-def _remove_files(clip_ids: list[int], photo_urls: list[str]) -> None:
+def _unlink_quietly(path: str) -> None:
+    """Remove a file, tolerating a concurrent delete of the same path.
+    exists()-then-remove() is TOCTOU: two deletes of clips that share a
+    source file both see it present, and the loser would otherwise raise
+    an uncaught FileNotFoundError that 500s an already-successful delete."""
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.warning("could not remove %s: %s", path, e)
+
+
+def _remove_files(
+    clip_ids: list[int],
+    photo_urls: list[str],
+    source_files: list[str] | None = None,
+) -> None:
     for cid in clip_ids:
-        path = os.path.join(config.DATA_DIR, "clips", f"{cid}.mp3")
-        if os.path.exists(path):
-            os.remove(path)
+        _unlink_quietly(os.path.join(config.DATA_DIR, "clips", f"{cid}.mp3"))
     for url in photo_urls:
-        path = os.path.join(config.DATA_DIR, "photos", os.path.basename(url))
-        if os.path.exists(path):
-            os.remove(path)
+        _unlink_quietly(os.path.join(config.DATA_DIR, "photos", os.path.basename(url)))
+    # Trim sources leak forever otherwise (roster churn grows the volume
+    # unbounded). Called AFTER the rows are deleted, so the reference check
+    # sees only surviving clips/hype — a source shared with them is kept.
+    for name in source_files or []:
+        if not name or source_file_referenced(name):
+            continue
+        _unlink_quietly(os.path.join(config.DATA_DIR, "sources", os.path.basename(name)))
 
 
 # ----------------------------------------------------------------- players
@@ -470,14 +509,17 @@ def delete_player(player_id: int) -> bool:
         ).fetchone()
         if row is None:
             return False
-        clip_ids = [
-            r["id"]
-            for r in conn.execute("SELECT id FROM clips WHERE player_id = ?", (player_id,))
-        ]
+        clips = conn.execute(
+            "SELECT id, source_file FROM clips WHERE player_id = ?", (player_id,)
+        ).fetchall()
         conn.execute("DELETE FROM players WHERE id = ?", (player_id,))
         conn.commit()
     photos = [row["photo_url"]] if row["photo_url"] else []
-    _remove_files(clip_ids, photos)
+    _remove_files(
+        [c["id"] for c in clips],
+        photos,
+        [c["source_file"] for c in clips if c["source_file"]],
+    )
     return True
 
 
@@ -537,18 +579,9 @@ def get_active_clip(player_id: int, clip_type: str) -> dict | None:
     return _clip_to_dict(row) if row else None
 
 
-def count_clips(player_id: int, clip_type: str) -> int:
-    with _lock:
-        return get_conn().execute(
-            "SELECT COUNT(*) AS c FROM clips WHERE player_id = ? AND type = ?",
-            (player_id, clip_type),
-        ).fetchone()["c"]
-
-
 def insert_clip(
     player_id: int,
     clip_type: str,
-    is_active: bool,
     source: str,
     source_url: str | None,
     duration_sec: float,
@@ -561,6 +594,16 @@ def insert_clip(
 ) -> int:
     with _lock:
         conn = get_conn()
+        # First clip of a player+type becomes active. Decided inside the same
+        # lock as the insert so two concurrent first-saves can't both count
+        # zero and both insert as active.
+        is_active = (
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM clips WHERE player_id = ? AND type = ?",
+                (player_id, clip_type),
+            ).fetchone()["c"]
+            == 0
+        )
         cur = conn.execute(
             "INSERT INTO clips (player_id, type, is_active, source, source_url,"
             " duration_sec, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms,"
@@ -584,6 +627,21 @@ def insert_clip(
         )
         conn.commit()
         return cur.lastrowid
+
+
+def source_file_referenced(basename: str) -> bool:
+    """True if any clip or hype row still points at sources/<basename>."""
+    with _lock:
+        conn = get_conn()
+        clip = conn.execute(
+            "SELECT 1 FROM clips WHERE source_file = ? LIMIT 1", (basename,)
+        ).fetchone()
+        if clip:
+            return True
+        hype = conn.execute(
+            "SELECT 1 FROM hype WHERE source_file = ? LIMIT 1", (basename,)
+        ).fetchone()
+        return hype is not None
 
 
 def get_clip_source_file(clip_id: int) -> str | None:
@@ -639,10 +697,13 @@ def activate_clip(clip_id: int) -> None:
 def delete_clip(clip_id: int) -> bool:
     with _lock:
         conn = get_conn()
+        row = conn.execute(
+            "SELECT source_file FROM clips WHERE id = ?", (clip_id,)
+        ).fetchone()
         cur = conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
         conn.commit()
     if cur.rowcount:
-        _remove_files([clip_id], [])
+        _remove_files([clip_id], [], [row["source_file"]] if row else [])
     return cur.rowcount > 0
 
 
@@ -754,10 +815,12 @@ def update_hype_trim(
 def delete_hype(hype_id: int) -> bool:
     with _lock:
         conn = get_conn()
+        row = conn.execute(
+            "SELECT source_file FROM hype WHERE id = ?", (hype_id,)
+        ).fetchone()
         cur = conn.execute("DELETE FROM hype WHERE id = ?", (hype_id,))
         conn.commit()
     if cur.rowcount:
-        path = os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3")
-        if os.path.exists(path):
-            os.remove(path)
+        _unlink_quietly(os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3"))
+        _remove_files([], [], [row["source_file"]] if row else [])
     return cur.rowcount > 0

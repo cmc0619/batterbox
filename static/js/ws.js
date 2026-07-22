@@ -53,10 +53,12 @@ function emit(event, msg) {
 
 const audio = new Audio();
 audio.preload = 'auto';
+let lastPlayId = null;
 // Song finished naturally → tell the server (same path as the STOP button)
 // so every client clears the playing state: tile highlight + Walter.
-// Without this the server thinks the clip plays forever.
-audio.addEventListener('ended', () => { playback.stop().catch(() => {}); });
+// The play_id makes it conditional server-side: a slow client's ended from
+// the PREVIOUS clip can no longer stop the one playing now.
+audio.addEventListener('ended', () => { playback.stop(lastPlayId).catch(() => {}); });
 let actx = null;
 let gainNode = null;
 let boostRouted = false;
@@ -74,6 +76,7 @@ function ensureBoostGraph() {
 
 function handlePlay(msg) {
   const vol = Math.max(0, Math.min(100, msg.volume ?? lastState.volume ?? 80));
+  lastPlayId = msg.play_id ?? null;
   lastState = { status: 'playing', clip_id: msg.clip_id, player_id: msg.player_id, type: msg.type, volume: vol };
   audio.volume = vol / 100;
   const boost = Number(msg.volume_boost_db) || 0;
@@ -154,7 +157,12 @@ const playback = {
   play: (player_id, type) => api('/api/playback/play', { method: 'POST', body: { player_id, type } }),
   playClip: (clip_id) => api('/api/playback/play_clip', { method: 'POST', body: { clip_id } }),
   playHype: (hype_id) => api('/api/playback/play_hype', { method: 'POST', body: { hype_id } }),
-  stop: () => api('/api/playback/stop', { method: 'POST' }),
+  // play_id: only the automatic `ended` reporter passes one; manual STOP
+  // (buttons, GPIO, keyboard) omits it and always stops.
+  stop: (play_id) => api('/api/playback/stop', {
+    method: 'POST',
+    ...(play_id != null ? { body: { play_id } } : {}),
+  }),
   next: () => api('/api/playback/next', { method: 'POST' }),
   setVolume: (volume) => api('/api/playback/volume', { method: 'POST', body: { volume: Math.max(0, Math.min(100, Math.round(volume))) } }),
   changeVolume: (delta) => playback.setVolume((lastState.volume ?? 80) + delta),

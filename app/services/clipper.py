@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import subprocess
+import threading
+import time
 import uuid
 from array import array
 from concurrent.futures import ThreadPoolExecutor
@@ -21,9 +23,57 @@ log = logging.getLogger("batterbox.clipper")
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="clipper")
 _jobs: dict[str, dict] = {}
+# Guards the _jobs map itself (request threads create/read, worker threads
+# exist in evicted entries). Individual job dict field updates stay unlocked —
+# single writer per job.
+_jobs_lock = threading.Lock()
 
 PEAK_BUCKETS = 800
 PCM_RATE = 8000  # mono s16le decode rate for analysis
+
+# What the import pipeline accepts as an uploaded source (shared by the
+# clips and hype routers). Sources are full songs/mixes people trim from;
+# 50MB ≈ 20+ min at 320kbps.
+UPLOAD_EXTS = {".mp3", ".m4a"}
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+# The upload cap bounds compressed bytes, not decoded ones — a low-bitrate
+# 50MB file can decode to hundreds of MB of PCM, enough to OOM a Pi. Cap the
+# source duration instead: 30 min decodes to ~29MB at the 8kHz mono analysis
+# rate. Nobody trims a walk-up song out of anything longer.
+MAX_SOURCE_DURATION_SEC = 30 * 60
+
+# In-flight import ceiling: the two-worker pool keeps the Pi responsive, but
+# an unbounded backlog of queued yt-dlp downloads can still fill the disk.
+MAX_ACTIVE_JOBS = 8
+
+# Jobs are only needed between import and POST /api/clips|/api/hype; anything
+# this old is abandoned (or stuck). Evicting just drops the dict entry — the
+# source file stays on disk for clips that already reference it.
+JOB_TTL_SEC = 60 * 60
+
+
+def _evict_stale_jobs() -> None:
+    """Drop abandoned jobs and their source files (when nothing references
+    them). Runs on every job create AND every job read, so eviction doesn't
+    depend on someone importing again later."""
+    cutoff = time.monotonic() - JOB_TTL_SEC
+    with _jobs_lock:
+        stale = [j for j in _jobs.values() if j["created_mono"] < cutoff]
+        for job in stale:
+            del _jobs[job["job_id"]]
+    for job in stale:
+        path = job.get("source_path")
+        if not path or not os.path.exists(path):
+            continue
+        if db.source_file_referenced(os.path.basename(path)):
+            continue  # a saved clip still re-edits from this source
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if stale:
+        log.info("evicted %d stale import job(s)", len(stale))
 
 
 class JobError(Exception):
@@ -42,7 +92,9 @@ class SourceMissingError(Exception):
 
 
 def get_job(job_id: str) -> dict | None:
-    return _jobs.get(job_id)
+    _evict_stale_jobs()
+    with _jobs_lock:
+        return _jobs.get(job_id)
 
 
 def job_public(job: dict) -> dict:
@@ -59,14 +111,24 @@ def job_public(job: dict) -> dict:
 
 
 def _new_job(source: str, source_url: str | None) -> dict:
-    job = {
-        "job_id": uuid.uuid4().hex[:12],
-        "status": "pending",
-        "detail": "",
-        "source": source,
-        "source_url": source_url,
-    }
-    _jobs[job["job_id"]] = job
+    _evict_stale_jobs()
+    with _jobs_lock:
+        active = sum(
+            1 for j in _jobs.values() if j["status"] in ("pending", "processing")
+        )
+        if active >= MAX_ACTIVE_JOBS:
+            raise JobError(
+                f"too many imports in progress ({active}) — wait for one to finish"
+            )
+        job = {
+            "job_id": uuid.uuid4().hex[:12],
+            "status": "pending",
+            "detail": "",
+            "source": source,
+            "source_url": source_url,
+            "created_mono": time.monotonic(),
+        }
+        _jobs[job["job_id"]] = job
     return job
 
 
@@ -121,6 +183,11 @@ def _run_youtube(job: dict) -> None:
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
         "quiet": True,
         "no_warnings": True,
+        # A playlist URL would otherwise download every entry; one import =
+        # one video. Size/timeouts bound accidental monster downloads.
+        "noplaylist": True,
+        "max_filesize": MAX_UPLOAD_BYTES,
+        "socket_timeout": 30,
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -132,7 +199,10 @@ def _run_youtube(job: dict) -> None:
     path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ".mp3")
     if not os.path.exists(path):
         job["status"] = "error"
-        job["detail"] = "yt-dlp did not produce an mp3 (is ffmpeg installed?)"
+        job["detail"] = (
+            "yt-dlp did not produce an mp3 (source larger than the "
+            f"{MAX_UPLOAD_BYTES // (1024 * 1024)}MB limit, or ffmpeg missing)"
+        )
         return
     _analyze(job, path)
 
@@ -169,6 +239,19 @@ def _analyze(job: dict, path: str) -> None:
     snippet = float(db.get_setting("default_snippet_length", "30"))
     try:
         duration = _ffprobe_duration(path)
+        if duration > MAX_SOURCE_DURATION_SEC:
+            # Checked before the PCM decode: the decoded stream is what can
+            # OOM a Pi, not the compressed file. Drop the useless source.
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            job["status"] = "error"
+            job["detail"] = (
+                f"source is {duration / 60:.0f} min long — the limit is "
+                f"{MAX_SOURCE_DURATION_SEC // 60} min"
+            )
+            return
         job["duration_sec"] = round(duration, 3)
         samples = _decode_pcm(path)
         job["peaks"] = _peaks(samples)
@@ -283,6 +366,12 @@ def _edit_context(source_file: str | None, key: str, obj: dict) -> dict:
     path = _source_path(source_file)
     try:
         duration = _ffprobe_duration(path)
+        if duration > MAX_SOURCE_DURATION_SEC:
+            # Same OOM guard as import analysis (pre-cap sources may exist).
+            raise RenderError(
+                f"source is {duration / 60:.0f} min long — re-edit supports "
+                f"up to {MAX_SOURCE_DURATION_SEC // 60} min"
+            )
         peaks = _peaks(_decode_pcm(path))
     except FileNotFoundError as e:
         raise RenderError(
@@ -304,6 +393,74 @@ def edit_context_hype(hype_id: int) -> dict:
     return _edit_context(db.get_hype_source_file(hype_id), "hype", db.get_hype(hype_id))
 
 
+def _probe_source(src: str) -> float:
+    """Source duration in seconds; RenderError if ffprobe is missing/fails."""
+    try:
+        return _ffprobe_duration(src)
+    except FileNotFoundError as e:
+        raise RenderError(
+            f"missing binary: {e.filename or e} (ffmpeg/ffprobe required)"
+        ) from None
+
+
+def _validate_trim(
+    src_duration: float,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+) -> float:
+    """Validate a trim against the source duration; returns the trimmed
+    duration. Raises JobError (client's fault → 400)."""
+    if trim_start_sec < 0:
+        raise JobError("trim_start_sec must be >= 0")
+    if trim_end_sec <= trim_start_sec:
+        raise JobError("trim_end_sec must be greater than trim_start_sec")
+    if fade_in_ms < 0 or fade_out_ms < 0:
+        raise JobError("fade_in_ms and fade_out_ms must be >= 0")
+    if trim_end_sec > src_duration:
+        raise JobError(
+            f"trim_end_sec exceeds source duration ({src_duration:.3f}s)"
+        )
+    return round(trim_end_sec - trim_start_sec, 3)
+
+
+# One lock per rendered item so two concurrent PATCHes of the same clip
+# can't interleave their file replace and DB update (file from request A,
+# metadata from request B). Grows one small Lock per re-rendered id — fine.
+_item_locks: dict[tuple[str, int], threading.Lock] = {}
+_item_locks_guard = threading.Lock()
+
+
+def _item_lock(dst_dir: str, item_id: int) -> threading.Lock:
+    with _item_locks_guard:
+        return _item_locks.setdefault((dst_dir, item_id), threading.Lock())
+
+
+def _render_to_temp(
+    src: str,
+    dst_dir: str,
+    trim_start_sec: float,
+    trim_end_sec: float,
+    duration: float,
+    fade_in_ms: int,
+    fade_out_ms: int,
+) -> str:
+    """Render a validated trim to a uniquely-named temp file in dst_dir and
+    return its path (same filesystem as the final name, so os.replace stays
+    atomic). Caller renames it onto <id>.mp3 once the row exists."""
+    tmp = os.path.join(
+        config.DATA_DIR, dst_dir, f"new.{uuid.uuid4().hex[:8]}.tmp.mp3"
+    )
+    try:
+        _render(src, tmp, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return tmp
+
+
 def _render_to_file(
     src: str,
     dst_dir: str,
@@ -312,29 +469,24 @@ def _render_to_file(
     trim_end_sec: float,
     fade_in_ms: int,
     fade_out_ms: int,
+    src_duration: float | None = None,
 ) -> float:
     """Validate the trim against the source duration, then render to
     DATA_DIR/<dst_dir>/<item_id>.mp3 via temp-file-then-move so a failed render
-    never leaves a half-written mp3. Returns the rendered duration."""
-    if trim_start_sec < 0:
-        raise JobError("trim_start_sec must be >= 0")
-    if trim_end_sec <= trim_start_sec:
-        raise JobError("trim_end_sec must be greater than trim_start_sec")
-    if fade_in_ms < 0 or fade_out_ms < 0:
-        raise JobError("fade_in_ms and fade_out_ms must be >= 0")
-    try:
-        src_duration = _ffprobe_duration(src)
-    except FileNotFoundError as e:
-        raise RenderError(
-            f"missing binary: {e.filename or e} (ffmpeg/ffprobe required)"
-        ) from None
-    if trim_end_sec > src_duration:
-        raise JobError(
-            f"trim_end_sec exceeds source duration ({src_duration:.3f}s)"
-        )
-    duration = round(trim_end_sec - trim_start_sec, 3)
+    never leaves a half-written mp3. Returns the rendered duration.
+    Pass `src_duration` if the caller already probed the source (one ffprobe
+    per request, not two)."""
+    if src_duration is None:
+        src_duration = _probe_source(src)
+    duration = _validate_trim(
+        src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+    )
     dst = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.mp3")
-    tmp = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.tmp.mp3")
+    # Unique per request: a shared <id>.tmp.mp3 would let two concurrent
+    # renders of the same item truncate each other's half-written output.
+    tmp = os.path.join(
+        config.DATA_DIR, dst_dir, f"{item_id}.tmp.{uuid.uuid4().hex[:8]}.mp3"
+    )
     try:
         _render(src, tmp, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
         os.replace(tmp, dst)  # atomic-ish: never a half-written clip file
@@ -355,18 +507,19 @@ def rerender_clip(
 ) -> dict:
     """Re-render a saved clip from its stored source with new trim settings."""
     src = _source_path(db.get_clip_source_file(clip_id))
-    duration = _render_to_file(
-        src, "clips", clip_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-    )
-    db.update_clip_trim(
-        clip_id,
-        duration_sec=duration,
-        trim_start_sec=trim_start_sec,
-        trim_end_sec=trim_end_sec,
-        fade_in_ms=fade_in_ms,
-        fade_out_ms=fade_out_ms,
-        volume_boost_db=volume_boost_db,
-    )
+    with _item_lock("clips", clip_id):
+        duration = _render_to_file(
+            src, "clips", clip_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        )
+        db.update_clip_trim(
+            clip_id,
+            duration_sec=duration,
+            trim_start_sec=trim_start_sec,
+            trim_end_sec=trim_end_sec,
+            fade_in_ms=fade_in_ms,
+            fade_out_ms=fade_out_ms,
+            volume_boost_db=volume_boost_db,
+        )
     return db.get_clip(clip_id)
 
 
@@ -380,23 +533,25 @@ def rerender_hype(
 ) -> dict:
     """Re-render a saved hype clip from its stored source with new trim."""
     src = _source_path(db.get_hype_source_file(hype_id))
-    duration = _render_to_file(
-        src, "hype", hype_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-    )
-    db.update_hype_trim(
-        hype_id,
-        duration_sec=duration,
-        trim_start_sec=trim_start_sec,
-        trim_end_sec=trim_end_sec,
-        fade_in_ms=fade_in_ms,
-        fade_out_ms=fade_out_ms,
-        volume_boost_db=volume_boost_db,
-    )
+    with _item_lock("hype", hype_id):
+        duration = _render_to_file(
+            src, "hype", hype_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+        )
+        db.update_hype_trim(
+            hype_id,
+            duration_sec=duration,
+            trim_start_sec=trim_start_sec,
+            trim_end_sec=trim_end_sec,
+            fade_in_ms=fade_in_ms,
+            fade_out_ms=fade_out_ms,
+            volume_boost_db=volume_boost_db,
+        )
     return db.get_hype(hype_id)
 
 
 def _done_job_source(job_id: str) -> tuple[dict, str]:
-    job = _jobs.get(job_id)
+    with _jobs_lock:
+        job = _jobs.get(job_id)
     if job is None:
         raise JobError("unknown job_id")
     if job["status"] != "done":
@@ -415,14 +570,21 @@ def create_clip(
     volume_boost_db: float,
 ) -> dict:
     job, src = _done_job_source(job_id)
-    if trim_end_sec <= trim_start_sec:
-        raise JobError("trim_end_sec must be greater than trim_start_sec")
-    duration = round(trim_end_sec - trim_start_sec, 3)
-    is_first = db.count_clips(player_id, clip_type) == 0
+    # Same validation as PATCH (incl. trim vs source duration) — fail fast
+    # with a clean 400 before touching the DB, not a 500 out of ffmpeg.
+    src_duration = _probe_source(src)
+    duration = _validate_trim(
+        src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+    )
+    # Render BEFORE inserting the row: renders take seconds, and a row that
+    # exists before its mp3 does is playable-but-404 on every client (and a
+    # crash mid-render would leave it behind permanently).
+    tmp = _render_to_temp(
+        src, "clips", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
+    )
     clip_id = db.insert_clip(
         player_id=player_id,
         clip_type=clip_type,
-        is_active=is_first,  # first clip of player+type becomes active
         source=job["source"],
         source_url=job["source_url"],
         duration_sec=duration,
@@ -433,11 +595,12 @@ def create_clip(
         volume_boost_db=volume_boost_db,
         source_file=os.path.basename(src),
     )
-    dst = os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3")
     try:
-        _render(src, dst, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
+        os.replace(tmp, os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3"))
     except Exception:
         db.delete_clip(clip_id)
+        if os.path.exists(tmp):
+            os.remove(tmp)
         raise
     return db.get_clip(clip_id)
 
@@ -455,9 +618,13 @@ def create_hype(
     title = title.strip()
     if not title or len(title) > 80:
         raise JobError("title must be 1–80 characters")
-    if trim_end_sec <= trim_start_sec:
-        raise JobError("trim_end_sec must be greater than trim_start_sec")
-    duration = round(trim_end_sec - trim_start_sec, 3)
+    src_duration = _probe_source(src)
+    duration = _validate_trim(
+        src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
+    )
+    tmp = _render_to_temp(
+        src, "hype", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
+    )
     hype_id = db.insert_hype(
         title=title,
         source=job["source"],
@@ -470,10 +637,11 @@ def create_hype(
         volume_boost_db=volume_boost_db,
         source_file=os.path.basename(src),
     )
-    dst = os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3")
     try:
-        _render(src, dst, trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms)
+        os.replace(tmp, os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3"))
     except Exception:
         db.delete_hype(hype_id)
+        if os.path.exists(tmp):
+            os.remove(tmp)
         raise
     return db.get_hype(hype_id)

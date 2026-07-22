@@ -177,24 +177,8 @@ def save_settings(ssid: str, password: str) -> tuple[dict, str | None]:
     return get_status(), None
 
 
-def enable_hotspot(ssid: str, password: str) -> tuple[dict, str | None]:
-    """Validate → check availability → save → switch radios. Any failure before
-    the save leaves stored settings untouched."""
-    ssid = (ssid or "").strip()
-    try:
-        _validate(ssid, password)
-    except ValueError as e:
-        return get_status(), str(e)
-    available, detail = _detect()
-    if not available:
-        return get_status(), detail
-    db.set_setting("wifi_ssid", ssid)
-    db.set_setting("wifi_password", password)
-    # Replace any previous profile so re-enabling with new credentials works.
-    ok, out = _run(["connection", "delete", "id", HOTSPOT_CON_NAME])
-    if not ok:
-        log.info("no stale '%s' connection to delete (%s)", HOTSPOT_CON_NAME, out)
-    ok, out = _run(
+def _create_hotspot(ssid: str, password: str) -> tuple[bool, str]:
+    return _run(
         [
             "device", "wifi", "hotspot",
             "ifname", IFNAME,
@@ -205,9 +189,34 @@ def enable_hotspot(ssid: str, password: str) -> tuple[dict, str | None]:
         ],
         timeout=_ENABLE_TIMEOUT,
     )
-    status = get_status()
+
+
+def enable_hotspot(ssid: str, password: str) -> tuple[dict, str | None]:
+    """Validate → check availability → switch radios → save. Credentials are
+    persisted only after nmcli succeeds, so a 400 never overwrites good
+    settings; if the new hotspot fails while the old one was running, the old
+    hotspot is restored (best-effort) so the Pi doesn't go dark."""
+    ssid = (ssid or "").strip()
+    try:
+        _validate(ssid, password)
+    except ValueError as e:
+        return get_status(), str(e)
+    available, detail = _detect()
+    if not available:
+        return get_status(), detail
+    prev_ssid = db.get_setting("wifi_ssid", DEFAULT_SSID)
+    prev_password = db.get_setting("wifi_password", DEFAULT_PASSWORD)
+    was_active = bool(_active_connections().get(HOTSPOT_CON_NAME))
+    # Replace any previous profile so re-enabling with new credentials works.
+    ok, out = _run(["connection", "delete", "id", HOTSPOT_CON_NAME])
+    if not ok:
+        log.info("no stale '%s' connection to delete (%s)", HOTSPOT_CON_NAME, out)
+    ok, out = _create_hotspot(ssid, password)
     if ok:
+        db.set_setting("wifi_ssid", ssid)
+        db.set_setting("wifi_password", password)
         log.info("Wi-Fi hotspot '%s' enabled on %s", ssid, IFNAME)
+        status = get_status()
         status["detail"] = (
             f"Hotspot '{ssid}' is ON — the Pi left its previous Wi-Fi. "
             f"Admin devices must join '{ssid}' and reopen "
@@ -216,6 +225,17 @@ def enable_hotspot(ssid: str, password: str) -> tuple[dict, str | None]:
         return status, None
     err = f"nmcli hotspot failed: {out or 'no response from nmcli'}"
     log.warning(err)
+    if was_active:
+        # The old profile was deleted above; recreate it from the still-stored
+        # previous credentials so admins keep a way onto the box.
+        ok2, out2 = _create_hotspot(prev_ssid, prev_password)
+        if ok2:
+            log.info("restored previous hotspot '%s' after failure", prev_ssid)
+            err += f" — previous hotspot '{prev_ssid}' restored"
+        else:
+            log.warning("failed to restore previous hotspot: %s", out2)
+            err += " — and restoring the previous hotspot failed"
+    status = get_status()
     status["detail"] = err
     return status, err
 
@@ -236,18 +256,24 @@ def connect_client(ssid: str, password: str) -> tuple[dict, str | None]:
     available, detail = _detect()
     if not available:
         return get_status(), detail
-    db.set_setting("wifi_ssid", ssid)
-    db.set_setting("wifi_password", password)
-    ok, out = _run(["connection", "down", "id", HOTSPOT_CON_NAME])
-    if not ok:
-        log.info("hotspot was not active before client connect (%s)", out)
+    was_hotspot = bool(_active_connections().get(HOTSPOT_CON_NAME))
+    if was_hotspot:
+        # One radio can't be AP and client at once. Down (not delete) the
+        # profile so it can be brought straight back up if the connect fails.
+        ok, out = _run(["connection", "down", "id", HOTSPOT_CON_NAME])
+        if not ok:
+            log.warning("failed to down hotspot before client connect: %s", out)
     args = ["device", "wifi", "connect", ssid, "ifname", IFNAME]
     if password:
         args += ["password", password]
     ok, out = _run(args, timeout=_ENABLE_TIMEOUT)
-    status = get_status()
     if ok:
+        # Persist only after success — a typo'd password must not overwrite
+        # the credentials of the hotspot people are actually using.
+        db.set_setting("wifi_ssid", ssid)
+        db.set_setting("wifi_password", password)
         log.info("Wi-Fi client connected to '%s' on %s", ssid, IFNAME)
+        status = get_status()
         status["detail"] = (
             f"Joined '{ssid}' as a client"
             + (f" ({status['ip']})" if status["ip"] else "")
@@ -256,6 +282,19 @@ def connect_client(ssid: str, password: str) -> tuple[dict, str | None]:
         return status, None
     err = f"nmcli connect failed: {out or 'no response from nmcli'}"
     log.warning(err)
+    if was_hotspot:
+        # Bring the hotspot back so the requesting phone can rejoin —
+        # otherwise a wrong password leaves the Pi unreachable in the field.
+        ok2, out2 = _run(
+            ["connection", "up", "id", HOTSPOT_CON_NAME], timeout=_ENABLE_TIMEOUT
+        )
+        if ok2:
+            log.info("restored hotspot after failed client connect")
+            err += " — hotspot restored, rejoin it to retry"
+        else:
+            log.warning("failed to restore hotspot: %s", out2)
+            err += " — and restoring the hotspot failed"
+    status = get_status()
     status["detail"] = err
     return status, err
 

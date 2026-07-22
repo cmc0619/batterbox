@@ -11,8 +11,6 @@ from ..services import clipper
 
 router = APIRouter(tags=["clips"])
 
-UPLOAD_EXTS = {".mp3", ".m4a"}
-
 
 @router.get("/api/players/{player_id}/clips")
 def list_clips(player_id: int):
@@ -25,7 +23,10 @@ def list_clips(player_id: int):
 def import_youtube(body: YoutubeImport):
     if db.get_player(body.player_id) is None:
         raise HTTPException(404, f"player {body.player_id} not found")
-    job = clipper.start_youtube_job(body.player_id, body.type, body.url)
+    try:
+        job = clipper.start_youtube_job(body.player_id, body.type, body.url)
+    except clipper.JobError as e:
+        raise HTTPException(429, str(e)) from e
     return {"job_id": job["job_id"]}
 
 
@@ -36,12 +37,19 @@ async def import_upload(player_id: int, type: str, file: UploadFile = File(...))
     if db.get_player(player_id) is None:
         raise HTTPException(404, f"player {player_id} not found")
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in UPLOAD_EXTS:
+    if ext not in clipper.UPLOAD_EXTS:
         raise HTTPException(400, "file must be mp3 or m4a")
-    data = await file.read()
+    # Bounded read: never pull more than the cap (+1 to detect overflow)
+    # into memory, whatever the client sends.
+    data = await file.read(clipper.MAX_UPLOAD_BYTES + 1)
+    if len(data) > clipper.MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "file must be 50MB or smaller")
     if not data:
         raise HTTPException(400, "empty file")
-    job = clipper.start_upload_job(player_id, type, ext, data)
+    try:
+        job = clipper.start_upload_job(player_id, type, ext, data)
+    except clipper.JobError as e:
+        raise HTTPException(429, str(e)) from e
     return {"job_id": job["job_id"]}
 
 
