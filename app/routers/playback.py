@@ -3,7 +3,13 @@ services.audio, which also broadcasts over /ws."""
 
 from fastapi import APIRouter, HTTPException
 
-from ..models import PlayClipRequest, PlayHypeRequest, PlayRequest, VolumeSet
+from ..models import (
+    PlayClipRequest,
+    PlayHypeRequest,
+    PlayRequest,
+    StopRequest,
+    VolumeSet,
+)
 from ..services import audio
 
 router = APIRouter(prefix="/api/playback", tags=["playback"])
@@ -36,8 +42,8 @@ def play_hype(body: PlayHypeRequest):
 
 
 @router.post("/stop")
-def stop():
-    return audio.stop()
+def stop(body: StopRequest | None = None):
+    return audio.stop(body.play_id if body else None)
 
 
 @router.post("/volume")

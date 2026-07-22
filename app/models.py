@@ -81,6 +81,12 @@ class PlayHypeRequest(BaseModel):
     hype_id: int
 
 
+class StopRequest(BaseModel):
+    # Browser `ended` handlers echo the play_id they were playing; the stop
+    # is ignored if another play superseded it. Manual stops send no body.
+    play_id: int | None = None
+
+
 class HypeYoutubeImport(BaseModel):
     title: str = Field(min_length=1, max_length=80)
     url: str
