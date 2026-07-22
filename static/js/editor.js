@@ -112,11 +112,28 @@ document.getElementById('btn-upload').addEventListener('click', () => {
 
 function fmt(sec) { return sec.toFixed(1); }
 
+const lengthInput = document.getElementById('region-length');
+
 function updateReadout() {
   if (!region) return;
   readout.textContent =
     `Region: ${fmt(region.start)}s → ${fmt(region.end)}s (${fmt(region.end - region.start)}s)`;
+  // keep the Length field in sync unless the user is typing in it right now
+  if (document.activeElement !== lengthInput) {
+    lengthInput.value = fmt(region.end - region.start);
+  }
 }
+
+// Type an exact window length instead of dragging the end handle pixel-hunting.
+lengthInput.addEventListener('change', () => {
+  if (!ws || !region) return;
+  const dur = ws.getDuration() || region.end;
+  let len = Number(lengthInput.value);
+  if (!Number.isFinite(len)) len = region.end - region.start;
+  len = Math.max(0.1, Math.min(len, dur - region.start));
+  region.setOptions({ start: region.start, end: region.start + len });
+  updateReadout();
+});
 
 function initEditor(job) {
   trimSection.hidden = false;
