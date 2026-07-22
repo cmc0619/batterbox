@@ -244,6 +244,22 @@ function attachDrag(row, handle) {
         if (Math.abs(dy) < 8) return;
         dragging = true;
         row.classList.add('dragging');
+        // Collapse any open detail panel: the drag moves only .player-row
+        // elements, so an open panel would be left stranded under the wrong
+        // player after the reorder. Removed directly (NOT via renderPlayers,
+        // which would rebuild the list and destroy the row mid-drag).
+        const det = listEl.querySelector('.player-detail');
+        if (det) {
+          const owner = listEl.querySelector(
+            `.player-row[data-player-id="${det.dataset.forPlayer}"]`
+          );
+          det.remove();
+          openPlayerId = null;
+          if (owner) {
+            const b = owner.querySelector('.row-btns button');
+            if (b) b.textContent = 'Edit';  // was 'Close' while open
+          }
+        }
       }
       const visualTop = grabTop + dy;
       row.style.transform = `translateY(${visualTop - row.offsetTop}px)`;
