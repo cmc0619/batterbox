@@ -187,7 +187,8 @@ function buildPlayerRow(p) {
   nm.textContent = p.name;
   const sub = document.createElement('div');
   sub.className = 'p-sub';
-  const bits = [`#${p.jersey_number ?? '?'}`];
+  // No number entered -> show nothing (not #0, not #?).
+  const bits = p.jersey_number != null ? [`#${p.jersey_number}`] : [];
   bits.push(p.active_walkup_clip_id ? 'walkup ✓' : 'walkup —');
   bits.push(p.active_homerun_clip_id ? 'homerun ✓' : 'homerun —');
   bits.push(p.active_walkout_clip_id ? 'walkout ✓' : 'walkout —');
@@ -563,7 +564,7 @@ document.getElementById('btn-add-player').addEventListener('click', async () => 
   try {
     await BB.api(`/api/teams/${selectedTeamId}/players`, {
       method: 'POST',
-      body: { name, jersey_number: jerseyOf(jerseyIn.value || '0') },
+      body: { name, jersey_number: jerseyOf(jerseyIn.value) },
     });
     nameIn.value = '';
     jerseyIn.value = '';
