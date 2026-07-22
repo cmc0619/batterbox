@@ -155,11 +155,19 @@ def _watch_mpv(proc: subprocess.Popen) -> None:
     server backend has no client to do that, so without this the state (and
     every kiosk's playing indicator) would stick until the next play/stop.
     """
+    global _mpv_proc, _mpv_ipc
     proc.wait()
+    # Check-and-clear atomically: check-then-stop() would leave a window
+    # where a clip started in between gets killed by this watcher. proc has
+    # already exited, so there is nothing to terminate. Broadcasting under
+    # the lock keeps this stop ordered before any subsequent play event.
     with _lock:
-        finished_naturally = _mpv_proc is proc
-    if finished_naturally:
-        stop()
+        if _mpv_proc is not proc:
+            return  # replaced or stopped while we waited; not ours to clear
+        _mpv_proc = None
+        _mpv_ipc = None
+        _state.update(status="idle", clip_id=None, player_id=None, type=None)
+        ws_manager.broadcast({"event": "stop"})
 
 
 # ------------------------------------------------------------ operations
