@@ -24,6 +24,14 @@ Big league music for big league moments. Raspberry Pi–hosted walk-up song play
 - UI rules: exactly 1024×600 kiosk layout, min ~18px text, huge touch targets, no hover-dependent interaction. Kiosk top bar has an O/D/H mode switch: O = offense (tap = walk-up clip, long-press 600ms = home-run clip), D = defense (players with an active walkout clip; tap = walkout, long-press = homerun), H = hype (crowd-stinger tiles, tap only). Volume is NOT on the top bar — it lives on the mock-GPIO bar (dev), physical GPIO buttons (Pi), and admin settings.
 - Commit + push autonomously after each verified slice. Keep this file and PROGRESS.md current in the same commits.
 
+## Cursor Cloud specific instructions
+
+- Skip Docker in the cloud VM — the fastest, most reliable run is the no-Docker backend (see Commands). Deps live in a `.venv` at the repo root (gitignored); the startup update script creates/refreshes it. Run with `DATA_DIR=./data MOCK_GPIO=true .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8080`.
+- First start auto-seeds `./data` from `seed.json` + `seed/clips/*.mp3` (2 teams, 24 players, active clips for the first 3 Sandlot players). No migration/seed command to run. The `./data` dir is gitignored — never commit it.
+- Verify via the UI at http://localhost:8080 (kiosk grid) — tap a seeded player tile (e.g. Bobby 'Rocket' Reyes #3) to play a walk-up clip. Playback state is server-side (WS `/ws`); browser backend needs a client's HTMLAudioElement `ended`/stop to clear "playing" (see lesson below).
+- Bluetooth (`/api/bluetooth/*`) and Wi-Fi hotspot (`/api/wifi/*`) intentionally report `available=false` off-Pi — that is expected, not a failure.
+- `.venv/bin/uvicorn --reload` hot-reloads on code edits; the DB/seed persists in `./data` across restarts.
+
 ## Lessons learned
 
 _(append dated entries whenever something bites)_
