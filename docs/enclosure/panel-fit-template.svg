@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+  width="254.0mm" height="159.94mm" viewBox="0 0 254.0 159.94">
+<style>
+  text { font: 700 4.5px system-ui, sans-serif; fill: #16202b; }
+  .small { font: 600 3.2px system-ui, sans-serif; fill: #5a6672; }
+</style>
+<rect x="0" y="0" width="254.0" height="159.94" fill="none" stroke="#000" stroke-width="0.6"/>
+<rect x="5.0" y="5.0" width="244.0" height="149.94" fill="none"
+      stroke="#c1272d" stroke-width="0.3" stroke-dasharray="3 2"/>
+<rect x="10.16" y="8.85" width="233.68" height="142.24" fill="none" stroke="#1f6fd6" stroke-width="0.7"/>
+<rect x="15.65" y="17.32" width="222.7" height="125.3" fill="none" stroke="#e8a800" stroke-width="0.7"/>
+<text x="127.0" y="71.97" text-anchor="middle">BatterBox panel template — Hammond 1456KH3BKBU</text>
+<text x="127.0" y="77.97" text-anchor="middle" class="small">panel 254 x 160 mm · screen bezel 233.7 x 142.2 mm (blue) · cutout 222.7 x 125.3 mm (amber)</text>
+<text x="127.0" y="83.47" text-anchor="middle" class="small">margins: 10.2 mm left/right · 8.8 mm top/bottom · red dashes = 5 mm bend keep-out</text>
+<text x="127.0" y="88.97" text-anchor="middle" class="small">PRINT AT 100% SCALE (no fit-to-page) · verify with the 50 mm bar below</text>
+<line x1="102.0" y1="147.94" x2="152.0" y2="147.94" stroke="#000" stroke-width="0.6"/>
+<line x1="102.0" y1="146.44" x2="102.0" y2="149.44" stroke="#000" stroke-width="0.6"/>
+<line x1="152.0" y1="146.44" x2="152.0" y2="149.44" stroke="#000" stroke-width="0.6"/>
+<text x="127.0" y="153.94" text-anchor="middle" class="small">50 mm</text>
+</svg>
