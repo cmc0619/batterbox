@@ -471,11 +471,24 @@ def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | 
             return status, err
     global _expire_timer, _pairing
     with _lock:
-        _pairing = True
-        _cancel_timer_locked()
-        _expire_timer = threading.Timer(duration_sec, _on_expire)
-        _expire_timer.daemon = True
-        _expire_timer.start()
+        # The agent must still be alive when the window commits: the adapter
+        # commands above block for seconds, and the session can die in that
+        # gap (bluetoothd restart). Checked in the same lock hold that flips
+        # _pairing so the reader's death-cleanup can't be overwritten.
+        agent_alive = _agent_proc is not None and _agent_proc.poll() is None
+        if agent_alive:
+            _pairing = True
+            _cancel_timer_locked()
+            _expire_timer = threading.Timer(duration_sec, _on_expire)
+            _expire_timer.daemon = True
+            _expire_timer.start()
+    if not agent_alive:
+        err = "pairing agent died during adapter setup"
+        log.warning(err)
+        _set_pairing(False)  # rolls the adapter back; agent is already gone
+        status = get_status()
+        status["detail"] = err
+        return status, err
     log.info("Bluetooth pairing mode on for %ss", duration_sec)
     _notify_listeners(True)
     return get_status(), None
