@@ -682,6 +682,13 @@ def source_protected(basename: str) -> bool:
 # source lookup and its os.replace, so the render writes <id>.mp3 after the row
 # is gone (orphaned file) and the trim UPDATE matches nothing. Lives here so
 # clipper (re-render) and delete_clip/delete_hype share the exact same lock.
+#
+# Entries are never evicted: the dict is bounded by the number of distinct
+# clip/hype ids ever touched (tens–hundreds on a real roster), each a tiny
+# Lock, so the retained memory is negligible for this single-device appliance.
+# Safe eviction would need refcounting — deleting an in-use lock would
+# reintroduce exactly the delete/re-render race this exists to prevent — so
+# it's deliberately not worth the complexity here.
 _item_locks: dict[tuple[str, int], threading.Lock] = {}
 _item_locks_guard = threading.Lock()
 
