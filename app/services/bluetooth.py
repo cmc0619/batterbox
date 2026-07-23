@@ -10,12 +10,16 @@ here ever raises into a router.
 import atexit
 import logging
 import os
-import pty
 import re
 import select
 import shutil
 import subprocess
 import threading
+
+try:
+    import pty
+except ImportError:  # native Windows lacks termios — agent can't run there;
+    pty = None      # degrade to available=false instead of crashing app startup
 
 log = logging.getLogger("batterbox.bluetooth")
 
@@ -262,6 +266,8 @@ def _start_agent() -> tuple[bool, str]:
                 except OSError:
                     pass
                 _agent_fd = None
+            if pty is None:
+                return False, "bluetoothctl agent needs a POSIX pty — unavailable on native Windows (run in Docker)"
             try:
                 master, slave = pty.openpty()
             except OSError as e:
