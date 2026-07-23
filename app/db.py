@@ -410,7 +410,7 @@ def _remove_files(
     # unbounded). Called AFTER the rows are deleted, so the reference check
     # sees only surviving clips/hype — a source shared with them is kept.
     for name in source_files or []:
-        if not name or source_file_referenced(name):
+        if not name or source_protected(name):
             continue
         _unlink_quietly(os.path.join(config.DATA_DIR, "sources", os.path.basename(name)))
 
@@ -644,6 +644,39 @@ def source_file_referenced(basename: str) -> bool:
         return hype is not None
 
 
+# Sources a render is actively reading but whose clip/hype row doesn't exist
+# yet (clip creation renders BEFORE inserting the row). Without this, a
+# concurrent delete/eviction in that multi-second window would see the source
+# as unreferenced and unlink it — leaving the new clip with a dangling
+# source_file (re-edit 409s forever) or killing the in-flight ffmpeg read.
+# Refcounted: the same source can back two concurrent creates.
+_sources_in_use: dict[str, int] = {}
+
+
+def mark_source_in_use(basename: str) -> None:
+    with _lock:
+        _sources_in_use[basename] = _sources_in_use.get(basename, 0) + 1
+
+
+def release_source_in_use(basename: str) -> None:
+    with _lock:
+        n = _sources_in_use.get(basename, 0) - 1
+        if n > 0:
+            _sources_in_use[basename] = n
+        else:
+            _sources_in_use.pop(basename, None)
+
+
+def source_protected(basename: str) -> bool:
+    """A source must be kept if a saved row references it OR a render is in
+    flight against it. Use this (not source_file_referenced) for any deletion
+    or eviction decision."""
+    with _lock:
+        if _sources_in_use.get(basename):
+            return True
+    return source_file_referenced(basename)
+
+
 def get_clip_source_file(clip_id: int) -> str | None:
     """Internal: relative filename of the clip's full-length source in sources/."""
     with _lock:
@@ -694,7 +727,10 @@ def activate_clip(clip_id: int) -> None:
         conn.commit()
 
 
-def delete_clip(clip_id: int) -> bool:
+def delete_clip(clip_id: int, remove_source: bool = True) -> bool:
+    """Delete a clip row + its rendered mp3, and (by default) its trim source
+    if nothing else references it. `remove_source=False` keeps the source —
+    used when rolling back a failed create so a retry can re-render from it."""
     with _lock:
         conn = get_conn()
         row = conn.execute(
@@ -703,7 +739,8 @@ def delete_clip(clip_id: int) -> bool:
         cur = conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
         conn.commit()
     if cur.rowcount:
-        _remove_files([clip_id], [], [row["source_file"]] if row else [])
+        sources = [row["source_file"]] if (row and remove_source) else []
+        _remove_files([clip_id], [], sources)
     return cur.rowcount > 0
 
 
@@ -812,7 +849,8 @@ def update_hype_trim(
         conn.commit()
 
 
-def delete_hype(hype_id: int) -> bool:
+def delete_hype(hype_id: int, remove_source: bool = True) -> bool:
+    """See delete_clip; `remove_source=False` keeps the source for a retry."""
     with _lock:
         conn = get_conn()
         row = conn.execute(
@@ -822,5 +860,6 @@ def delete_hype(hype_id: int) -> bool:
         conn.commit()
     if cur.rowcount:
         _unlink_quietly(os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3"))
-        _remove_files([], [], [row["source_file"]] if row else [])
+        sources = [row["source_file"]] if (row and remove_source) else []
+        _remove_files([], [], sources)
     return cur.rowcount > 0
