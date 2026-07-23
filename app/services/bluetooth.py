@@ -12,6 +12,7 @@ import logging
 import os
 import pty
 import re
+import select
 import shutil
 import subprocess
 import threading
@@ -40,6 +41,9 @@ _agent_reader: threading.Thread | None = None
 # outcome here; enter_pairing must not open the window without confirmation.
 _agent_confirm = threading.Event()
 _agent_confirm_ok = False  # guarded by _lock
+# Bumped per spawned session; a reader thread that outlives its session's
+# teardown (join timeout) must not confirm/fail a newer session's handshake.
+_agent_gen = 0  # guarded by _lock
 
 _MAC_RE = re.compile(r"^Device\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s*(.*)$")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|[\x01\x02\r]")
@@ -112,16 +116,26 @@ def _list_devices() -> list[dict]:
     return devices
 
 
-def _set_agent_confirm(ok: bool) -> None:
-    """Record the agent-registration outcome and wake the waiter."""
+def _set_agent_confirm(gen: int, ok: bool) -> None:
+    """Record the agent-registration outcome and wake the waiter.
+
+    Ignored when gen is stale — a reader thread from a torn-down session
+    must not decide a newer session's handshake.
+    """
     global _agent_confirm_ok
     with _lock:
+        if gen != _agent_gen:
+            return
         _agent_confirm_ok = ok
     _agent_confirm.set()
 
 
 def _agent_send(cmd: str) -> bool:
-    """Write one command into the live agent session. Never raises."""
+    """Write one command into the live agent session. Never raises.
+
+    The pty master is non-blocking, so this can't stall while holding _lock;
+    a full buffer (stalled bluetoothctl) fails the write instead.
+    """
     with _lock:
         fd = _agent_fd
         if fd is None:
@@ -134,20 +148,29 @@ def _agent_send(cmd: str) -> bool:
             return False
 
 
-def _agent_reader_loop(fd: int, proc: subprocess.Popen) -> None:
+def _agent_reader_loop(fd: int, proc: subprocess.Popen, gen: int) -> None:
     """Watch the agent session's output: auto-accept prompts, trust on pair.
 
     With a NoInputNoOutput agent BlueZ does "just works" pairing and should
     not prompt, but some stacks still ask for service authorization — answer
     yes to any (yes/no) prompt. Devices that complete pairing get trusted so
     they can reconnect later without the pairing window being open.
+
+    Also detects the session dying unexpectedly and closes the pairing
+    window, since a window without an agent can't accept anything.
     """
+    global _agent_proc, _agent_fd, _agent_reader, _pairing
     buf = ""
     trusted: set[str] = set()
     while True:
         try:
+            # fd is non-blocking (so writers can never stall on it); select
+            # provides the blocking wait for the read side.
+            select.select([fd], [], [])
             chunk = os.read(fd, 4096)
-        except OSError:
+        except BlockingIOError:
+            continue
+        except (OSError, ValueError):
             break
         if not chunk:
             break
@@ -169,14 +192,14 @@ def _agent_reader_loop(fd: int, proc: subprocess.Popen) -> None:
                 # default-agent only succeeds with an agent registered, so
                 # this one line confirms the whole registration sequence.
                 log.info("bluetoothctl: %s", line)
-                _set_agent_confirm(ok=True)
+                _set_agent_confirm(gen, ok=True)
             elif (
                 "Default agent request failed" in line
                 or "Failed to register agent" in line
                 or "No agent is registered" in line
             ):
                 log.warning("bluetoothctl: %s", line)
-                _set_agent_confirm(ok=False)
+                _set_agent_confirm(gen, ok=False)
             elif "Agent registered" in line:
                 log.info("bluetoothctl: %s", line)
         # Prompts don't end with a newline, so they sit in the partial tail.
@@ -187,70 +210,102 @@ def _agent_reader_loop(fd: int, proc: subprocess.Popen) -> None:
         elif len(buf) > 4096:  # unterminated garbage; don't grow unbounded
             buf = buf[-1024:]
     rc = proc.poll()
+    fd_to_close = None
+    was_pairing = False
     with _lock:
-        died_unexpectedly = _agent_proc is proc  # _stop_agent nulls this first
-    if died_unexpectedly:
-        log.warning(
-            "bluetoothctl agent session died unexpectedly (rc=%s); "
-            "exiting pairing mode — no agent means pairing can't be accepted",
-            rc,
-        )
-        _set_pairing(False)
-    else:
+        current = _agent_proc is proc
+        if current:
+            # Claim the dead session atomically: with the globals nulled and
+            # _pairing flipped in the same lock hold, a concurrent
+            # _start_agent can only ever spawn a fresh session — this path
+            # can never tear down a live replacement.
+            _agent_proc = None
+            fd_to_close = _agent_fd
+            _agent_fd = None
+            _agent_reader = None
+            was_pairing = _pairing
+            _pairing = False
+            _cancel_timer_locked()
+    if not current:
+        # _stop_agent (or a replacement start) already owns the cleanup.
         log.info("bluetoothctl agent session ended (rc=%s)", rc)
+        return
+    log.warning(
+        "bluetoothctl agent session died unexpectedly (rc=%s); "
+        "exiting pairing mode — no agent means pairing can't be accepted",
+        rc,
+    )
+    if fd_to_close is not None:
+        try:
+            os.close(fd_to_close)
+        except OSError:
+            pass
+    # Best-effort: leave the adapter as we found it.
+    _run(["discoverable", "off"])
+    _run(["pairable", "off"])
+    if was_pairing:
+        _notify_listeners(False)
 
 
 def _start_agent() -> tuple[bool, str]:
     """Ensure the persistent agent session is running with its agent confirmed
     registered by BlueZ. Returns (ok, detail)."""
-    global _agent_proc, _agent_fd, _agent_reader, _agent_confirm_ok
+    global _agent_proc, _agent_fd, _agent_reader, _agent_confirm_ok, _agent_gen
+    spawned = False
     with _lock:
-        if _agent_proc is not None and _agent_proc.poll() is None:
-            # Confirmed at start; a session that lost its agent would have
-            # been torn down, not left running.
-            return True, "pairing agent already running"
-        # Clean up a session that died on its own (e.g. bluetoothd restart).
-        _agent_proc = None
-        if _agent_fd is not None:
+        if _agent_proc is None or _agent_proc.poll() is not None:
+            # Clean up a session that died on its own (bluetoothd restart).
+            _agent_proc = None
+            if _agent_fd is not None:
+                try:
+                    os.close(_agent_fd)
+                except OSError:
+                    pass
+                _agent_fd = None
             try:
-                os.close(_agent_fd)
-            except OSError:
-                pass
-            _agent_fd = None
-        try:
-            master, slave = pty.openpty()
-        except OSError as e:
-            return False, f"could not allocate pty for bluetoothctl: {e}"
-        try:
-            proc = subprocess.Popen(  # noqa: S603 - fixed argv, no user input
-                ["bluetoothctl"],
-                stdin=slave,
-                stdout=slave,
-                stderr=slave,
-                close_fds=True,
-            )
-        except Exception as e:  # noqa: BLE001 - must never leak to routers
-            os.close(master)
+                master, slave = pty.openpty()
+            except OSError as e:
+                return False, f"could not allocate pty for bluetoothctl: {e}"
+            try:
+                proc = subprocess.Popen(  # noqa: S603 - fixed argv, no user input
+                    ["bluetoothctl"],
+                    stdin=slave,
+                    stdout=slave,
+                    stderr=slave,
+                    close_fds=True,
+                )
+            except Exception as e:  # noqa: BLE001 - must never leak to routers
+                os.close(master)
+                os.close(slave)
+                return False, f"could not start bluetoothctl agent session: {e}"
             os.close(slave)
-            return False, f"could not start bluetoothctl agent session: {e}"
-        os.close(slave)
-        _agent_proc = proc
-        _agent_fd = master
-        _agent_confirm.clear()
-        _agent_confirm_ok = False
-        _agent_reader = threading.Thread(
-            target=_agent_reader_loop,
-            args=(master, proc),
-            daemon=True,
-            name="bt-agent-reader",
-        )
-        _agent_reader.start()
-        # bluetoothctl auto-registers a KeyboardDisplay agent on startup;
-        # swap it for NoInputNoOutput so pairing is auto-accepted (no PIN).
-        for cmd in ("agent off", "agent NoInputNoOutput", "default-agent"):
-            _agent_send(cmd)
+            # Non-blocking master: _agent_send writes while holding _lock,
+            # and a stalled bluetoothctl must fail the write (caught, logged)
+            # rather than wedge every thread that needs the lock. The reader
+            # side waits in select() instead of a blocking read.
+            os.set_blocking(master, False)
+            spawned = True
+            _agent_proc = proc
+            _agent_fd = master
+            _agent_gen += 1
+            _agent_confirm.clear()
+            _agent_confirm_ok = False
+            _agent_reader = threading.Thread(
+                target=_agent_reader_loop,
+                args=(master, proc, _agent_gen),
+                daemon=True,
+                name="bt-agent-reader",
+            )
+            _agent_reader.start()
+            # bluetoothctl auto-registers a KeyboardDisplay agent on startup;
+            # swap it for NoInputNoOutput so pairing is auto-accepted (no PIN).
+            for cmd in ("agent off", "agent NoInputNoOutput", "default-agent"):
+                _agent_send(cmd)
     # Wait for BlueZ to confirm — outside the lock so the reader can run.
-    # Writing to the pty proves nothing; registration can be rejected.
+    # Writing to the pty proves nothing; registration can be rejected. A
+    # caller that found the session already running waits on the same event:
+    # for a confirmed session it is already set and this returns instantly,
+    # and a concurrent caller can't slip past an unconfirmed handshake.
     confirmed = _agent_confirm.wait(timeout=_CMD_TIMEOUT)
     with _lock:
         ok = confirmed and _agent_confirm_ok
@@ -263,8 +318,10 @@ def _start_agent() -> tuple[bool, str]:
         log.warning("%s; closing agent session", detail)
         _stop_agent()
         return False, detail
-    log.info("bluetoothctl agent session started (pid %s)", proc.pid)
-    return True, "pairing agent started"
+    if spawned:
+        log.info("bluetoothctl agent session started (pid %s)", proc.pid)
+        return True, "pairing agent started"
+    return True, "pairing agent already running"
 
 
 def _stop_agent() -> None:
@@ -359,14 +416,20 @@ def _set_pairing(active: bool) -> None:
     """Flip pairing state; on exit also tear down the agent and adapter."""
     global _pairing
     with _lock:
+        changed = _pairing != active
         _pairing = active
         _cancel_timer_locked()
     if not active:
+        # Teardown runs even without a state change — the failure rollback
+        # in enter_pairing lands here before _pairing was ever set True.
         _stop_agent()
         # Best-effort: leave the adapter as we found it.
         _run(["discoverable", "off"])
         _run(["pairable", "off"])
-    _notify_listeners(active)
+    if changed:
+        # Only real transitions reach listeners: rolling back a pairing
+        # start that never activated must not blink the LED "stopped".
+        _notify_listeners(active)
 
 
 def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | None]:
