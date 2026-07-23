@@ -430,16 +430,15 @@ def _validate_trim(
     return round(trim_end_sec - trim_start_sec, 3)
 
 
-# One lock per rendered item so two concurrent PATCHes of the same clip
-# can't interleave their file replace and DB update (file from request A,
-# metadata from request B). Grows one small Lock per re-rendered id — fine.
-_item_locks: dict[tuple[str, int], threading.Lock] = {}
-_item_locks_guard = threading.Lock()
-
-
-def _item_lock(dst_dir: str, item_id: int) -> threading.Lock:
-    with _item_locks_guard:
-        return _item_locks.setdefault((dst_dir, item_id), threading.Lock())
+def _discard_render(dst_dir: str, item_id: int) -> None:
+    """Remove a just-rendered <id>.mp3 whose row vanished mid-render (a cascade
+    delete of the owning player/team, which doesn't take the per-item lock)."""
+    try:
+        os.remove(os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.mp3"))
+    except FileNotFoundError:
+        pass  # already removed by the cascade delete — expected
+    except OSError as e:  # e.g. permission error — don't mask a real fs problem
+        log.warning("could not discard orphaned render %s/%s.mp3: %s", dst_dir, item_id, e)
 
 
 def _render_to_temp(
@@ -509,14 +508,29 @@ def rerender_clip(
     fade_in_ms: int,
     fade_out_ms: int,
     volume_boost_db: float,
-) -> dict:
-    """Re-render a saved clip from its stored source with new trim settings."""
-    src = _source_path(db.get_clip_source_file(clip_id))
-    with _item_lock("clips", clip_id):
-        duration = _render_to_file(
-            src, "clips", clip_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-        )
-        db.update_clip_trim(
+) -> dict | None:
+    """Re-render a saved clip from its stored source. Returns None if the clip
+    was deleted during the render (router turns that into a 404)."""
+    # Everything — source lookup included — runs under the lock delete_clip
+    # holds, so a direct delete can't unlink the source mid-lookup/render (that
+    # would surface as a 500 instead of the clean 404 for a deleted clip).
+    with db.item_lock("clips", clip_id):
+        if db.get_clip(clip_id) is None:
+            return None  # deleted before we acquired the lock
+        try:
+            src = _source_path(db.get_clip_source_file(clip_id))
+            duration = _render_to_file(
+                src, "clips", clip_id, trim_start_sec, trim_end_sec,
+                fade_in_ms, fade_out_ms,
+            )
+        except (RenderError, SourceMissingError):
+            # If the row vanished (cascade delete of the owning player/team,
+            # which bypasses the per-item lock), report it as deleted, not as
+            # a source/render error.
+            if db.get_clip(clip_id) is None:
+                return None
+            raise
+        updated = db.update_clip_trim(
             clip_id,
             duration_sec=duration,
             trim_start_sec=trim_start_sec,
@@ -525,6 +539,9 @@ def rerender_clip(
             fade_out_ms=fade_out_ms,
             volume_boost_db=volume_boost_db,
         )
+        if not updated:
+            _discard_render("clips", clip_id)
+            return None
     return db.get_clip(clip_id)
 
 
@@ -535,14 +552,23 @@ def rerender_hype(
     fade_in_ms: int,
     fade_out_ms: int,
     volume_boost_db: float,
-) -> dict:
-    """Re-render a saved hype clip from its stored source with new trim."""
-    src = _source_path(db.get_hype_source_file(hype_id))
-    with _item_lock("hype", hype_id):
-        duration = _render_to_file(
-            src, "hype", hype_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-        )
-        db.update_hype_trim(
+) -> dict | None:
+    """Re-render a saved hype clip from its stored source. Returns None if the
+    hype clip was deleted during the render (router turns that into a 404)."""
+    with db.item_lock("hype", hype_id):
+        if db.get_hype(hype_id) is None:
+            return None  # deleted before we acquired the lock
+        try:
+            src = _source_path(db.get_hype_source_file(hype_id))
+            duration = _render_to_file(
+                src, "hype", hype_id, trim_start_sec, trim_end_sec,
+                fade_in_ms, fade_out_ms,
+            )
+        except (RenderError, SourceMissingError):
+            if db.get_hype(hype_id) is None:
+                return None
+            raise
+        updated = db.update_hype_trim(
             hype_id,
             duration_sec=duration,
             trim_start_sec=trim_start_sec,
@@ -551,6 +577,9 @@ def rerender_hype(
             fade_out_ms=fade_out_ms,
             volume_boost_db=volume_boost_db,
         )
+        if not updated:
+            _discard_render("hype", hype_id)
+            return None
     return db.get_hype(hype_id)
 
 

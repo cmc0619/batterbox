@@ -677,6 +677,27 @@ def source_protected(basename: str) -> bool:
     return source_file_referenced(basename)
 
 
+# Per-item lock (keyed by media kind + id) serializing a re-render against a
+# delete of the SAME item. Without it, a delete can land between a re-render's
+# source lookup and its os.replace, so the render writes <id>.mp3 after the row
+# is gone (orphaned file) and the trim UPDATE matches nothing. Lives here so
+# clipper (re-render) and delete_clip/delete_hype share the exact same lock.
+#
+# Entries are never evicted: the dict is bounded by the number of distinct
+# clip/hype ids ever touched (tens–hundreds on a real roster), each a tiny
+# Lock, so the retained memory is negligible for this single-device appliance.
+# Safe eviction would need refcounting — deleting an in-use lock would
+# reintroduce exactly the delete/re-render race this exists to prevent — so
+# it's deliberately not worth the complexity here.
+_item_locks: dict[tuple[str, int], threading.Lock] = {}
+_item_locks_guard = threading.Lock()
+
+
+def item_lock(kind: str, item_id: int) -> threading.Lock:
+    with _item_locks_guard:
+        return _item_locks.setdefault((kind, item_id), threading.Lock())
+
+
 def get_clip_source_file(clip_id: int) -> str | None:
     """Internal: relative filename of the clip's full-length source in sources/."""
     with _lock:
@@ -694,10 +715,11 @@ def update_clip_trim(
     fade_in_ms: int,
     fade_out_ms: int,
     volume_boost_db: float,
-) -> None:
+) -> bool:
+    """Returns False if the clip no longer exists (deleted mid-render)."""
     with _lock:
         conn = get_conn()
-        conn.execute(
+        cur = conn.execute(
             "UPDATE clips SET duration_sec = ?, trim_start_sec = ?, trim_end_sec = ?,"
             " fade_in_ms = ?, fade_out_ms = ?, volume_boost_db = ? WHERE id = ?",
             (
@@ -711,6 +733,7 @@ def update_clip_trim(
             ),
         )
         conn.commit()
+        return cur.rowcount > 0
 
 
 def activate_clip(clip_id: int) -> None:
@@ -730,18 +753,22 @@ def activate_clip(clip_id: int) -> None:
 def delete_clip(clip_id: int, remove_source: bool = True) -> bool:
     """Delete a clip row + its rendered mp3, and (by default) its trim source
     if nothing else references it. `remove_source=False` keeps the source —
-    used when rolling back a failed create so a retry can re-render from it."""
-    with _lock:
-        conn = get_conn()
-        row = conn.execute(
-            "SELECT source_file FROM clips WHERE id = ?", (clip_id,)
-        ).fetchone()
-        cur = conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
-        conn.commit()
-    if cur.rowcount:
-        sources = [row["source_file"]] if (row and remove_source) else []
-        _remove_files([clip_id], [], sources)
-    return cur.rowcount > 0
+    used when rolling back a failed create so a retry can re-render from it.
+
+    Held under the per-item lock so it can't interleave with a re-render of the
+    same clip (which would otherwise re-create the deleted <id>.mp3)."""
+    with item_lock("clips", clip_id):
+        with _lock:
+            conn = get_conn()
+            row = conn.execute(
+                "SELECT source_file FROM clips WHERE id = ?", (clip_id,)
+            ).fetchone()
+            cur = conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+            conn.commit()
+        if cur.rowcount:
+            sources = [row["source_file"]] if (row and remove_source) else []
+            _remove_files([clip_id], [], sources)
+        return cur.rowcount > 0
 
 
 # -------------------------------------------------------------------- hype
@@ -830,10 +857,11 @@ def update_hype_trim(
     fade_in_ms: int,
     fade_out_ms: int,
     volume_boost_db: float,
-) -> None:
+) -> bool:
+    """Returns False if the hype clip no longer exists (deleted mid-render)."""
     with _lock:
         conn = get_conn()
-        conn.execute(
+        cur = conn.execute(
             "UPDATE hype SET duration_sec = ?, trim_start_sec = ?, trim_end_sec = ?,"
             " fade_in_ms = ?, fade_out_ms = ?, volume_boost_db = ? WHERE id = ?",
             (
@@ -847,19 +875,22 @@ def update_hype_trim(
             ),
         )
         conn.commit()
+        return cur.rowcount > 0
 
 
 def delete_hype(hype_id: int, remove_source: bool = True) -> bool:
-    """See delete_clip; `remove_source=False` keeps the source for a retry."""
-    with _lock:
-        conn = get_conn()
-        row = conn.execute(
-            "SELECT source_file FROM hype WHERE id = ?", (hype_id,)
-        ).fetchone()
-        cur = conn.execute("DELETE FROM hype WHERE id = ?", (hype_id,))
-        conn.commit()
-    if cur.rowcount:
-        _unlink_quietly(os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3"))
-        sources = [row["source_file"]] if (row and remove_source) else []
-        _remove_files([], [], sources)
-    return cur.rowcount > 0
+    """See delete_clip; `remove_source=False` keeps the source for a retry.
+    Held under the per-item lock to serialize against a concurrent re-render."""
+    with item_lock("hype", hype_id):
+        with _lock:
+            conn = get_conn()
+            row = conn.execute(
+                "SELECT source_file FROM hype WHERE id = ?", (hype_id,)
+            ).fetchone()
+            cur = conn.execute("DELETE FROM hype WHERE id = ?", (hype_id,))
+            conn.commit()
+        if cur.rowcount:
+            _unlink_quietly(os.path.join(config.DATA_DIR, "hype", f"{hype_id}.mp3"))
+            sources = [row["source_file"]] if (row and remove_source) else []
+            _remove_files([], [], sources)
+        return cur.rowcount > 0
