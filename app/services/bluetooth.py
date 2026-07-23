@@ -7,8 +7,10 @@ function degrades to available=false with a human-readable detail — nothing
 here ever raises into a router.
 """
 
+import atexit
 import logging
 import os
+import pty
 import re
 import shutil
 import subprocess
@@ -25,7 +27,18 @@ _expire_timer: threading.Timer | None = None
 _pairing = False
 _pairing_listeners: list = []  # fn(active: bool), e.g. the GPIO pairing LED
 
+# Long-lived bluetoothctl session that hosts the pairing agent. BlueZ agents
+# live only as long as the D-Bus client that registered them, so a one-shot
+# `bluetoothctl agent on` is useless — the agent dies with the process before
+# any speaker gets a chance to pair. This session stays up for the whole
+# pairing window.
+_agent_proc: subprocess.Popen | None = None
+_agent_fd: int | None = None  # pty master; a pty keeps bluetoothctl unbuffered
+_agent_reader: threading.Thread | None = None
+
 _MAC_RE = re.compile(r"^Device\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s*(.*)$")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|[\x01\x02\r]")
+_PAIRED_RE = re.compile(r"Device\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+Paired:\s+yes")
 
 
 def _run(args: list[str], timeout: int = _CMD_TIMEOUT) -> tuple[bool, str]:
@@ -94,6 +107,147 @@ def _list_devices() -> list[dict]:
     return devices
 
 
+def _agent_send(cmd: str) -> bool:
+    """Write one command into the live agent session. Never raises."""
+    with _lock:
+        fd = _agent_fd
+        if fd is None:
+            return False
+        try:
+            os.write(fd, (cmd + "\n").encode())
+            return True
+        except OSError as e:
+            log.warning("write to bluetoothctl agent session failed: %s", e)
+            return False
+
+
+def _agent_reader_loop(fd: int, proc: subprocess.Popen) -> None:
+    """Watch the agent session's output: auto-accept prompts, trust on pair.
+
+    With a NoInputNoOutput agent BlueZ does "just works" pairing and should
+    not prompt, but some stacks still ask for service authorization — answer
+    yes to any (yes/no) prompt. Devices that complete pairing get trusted so
+    they can reconnect later without the pairing window being open.
+    """
+    buf = ""
+    trusted: set[str] = set()
+    while True:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk.decode("utf-8", errors="replace")
+        buf = _ANSI_RE.sub("", buf)
+        *lines, buf = buf.split("\n")
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            m = _PAIRED_RE.search(line)
+            if m:
+                mac = m.group(1).upper()
+                if mac not in trusted:
+                    trusted.add(mac)
+                    log.info("Bluetooth device %s paired; trusting it", mac)
+                    _agent_send(f"trust {mac}")
+            elif "Agent registered" in line or "Default agent request successful" in line:
+                log.info("bluetoothctl: %s", line)
+        # Prompts don't end with a newline, so they sit in the partial tail.
+        if "(yes/no)" in buf:
+            log.info("Auto-accepting bluetoothctl prompt: %s", buf.strip())
+            _agent_send("yes")
+            buf = ""
+        elif len(buf) > 4096:  # unterminated garbage; don't grow unbounded
+            buf = buf[-1024:]
+    log.info("bluetoothctl agent session ended (rc=%s)", proc.poll())
+
+
+def _start_agent() -> tuple[bool, str]:
+    """Ensure the persistent agent session is running. Returns (ok, detail)."""
+    global _agent_proc, _agent_fd, _agent_reader
+    with _lock:
+        if _agent_proc is not None and _agent_proc.poll() is None:
+            return True, "pairing agent already running"
+        # Clean up a session that died on its own (e.g. bluetoothd restart).
+        _agent_proc = None
+        if _agent_fd is not None:
+            try:
+                os.close(_agent_fd)
+            except OSError:
+                pass
+            _agent_fd = None
+        try:
+            master, slave = pty.openpty()
+        except OSError as e:
+            return False, f"could not allocate pty for bluetoothctl: {e}"
+        try:
+            proc = subprocess.Popen(  # noqa: S603 - fixed argv, no user input
+                ["bluetoothctl"],
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                close_fds=True,
+            )
+        except Exception as e:  # noqa: BLE001 - must never leak to routers
+            os.close(master)
+            os.close(slave)
+            return False, f"could not start bluetoothctl agent session: {e}"
+        os.close(slave)
+        _agent_proc = proc
+        _agent_fd = master
+        _agent_reader = threading.Thread(
+            target=_agent_reader_loop,
+            args=(master, proc),
+            daemon=True,
+            name="bt-agent-reader",
+        )
+        _agent_reader.start()
+        # bluetoothctl auto-registers a KeyboardDisplay agent on startup;
+        # swap it for NoInputNoOutput so pairing is auto-accepted (no PIN).
+        for cmd in ("agent off", "agent NoInputNoOutput", "default-agent"):
+            _agent_send(cmd)
+    log.info("bluetoothctl agent session started (pid %s)", proc.pid)
+    return True, "pairing agent started"
+
+
+def _stop_agent() -> None:
+    """Tear down the persistent agent session. Never raises."""
+    global _agent_proc, _agent_fd, _agent_reader
+    with _lock:
+        proc, fd, reader = _agent_proc, _agent_fd, _agent_reader
+        _agent_proc = _agent_fd = _agent_reader = None
+    if proc is None:
+        return
+    if fd is not None:
+        try:
+            os.write(fd, b"quit\n")
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            log.warning("bluetoothctl agent session did not die on kill")
+    except Exception:  # noqa: BLE001
+        pass
+    if reader is not None and reader.is_alive():
+        reader.join(timeout=2)
+    if fd is not None:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    log.info("bluetoothctl agent session stopped")
+
+
+atexit.register(_stop_agent)
+
+
 def _notify_listeners(active: bool) -> None:
     for fn in list(_pairing_listeners):
         try:
@@ -143,6 +297,7 @@ def _set_pairing(active: bool) -> None:
         _pairing = active
         _cancel_timer_locked()
     if not active:
+        _stop_agent()
         # Best-effort: leave the adapter as we found it.
         _run(["discoverable", "off"])
         _run(["pairable", "off"])
@@ -157,13 +312,16 @@ def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | 
             {"available": False, "pairing": False, "detail": detail, "devices": []},
             detail,
         )
-    # Best-effort only: each _run is a one-shot bluetoothctl process, so the
-    # agent it registers dies with it (known limitation — a persistent agent
-    # needs a long-lived bluetoothctl session; untested without Pi hardware).
-    for args in (["agent", "on"], ["default-agent"]):
-        ok, out = _run(args)
-        if not ok:
-            log.warning("bluetoothctl %s failed: %s", " ".join(args), out)
+    # The agent must outlive this request: it stays registered only while its
+    # bluetoothctl session lives, and it is what auto-accepts the pairing.
+    # No agent → advertised auto-pairing can't work → fail the request.
+    ok, agent_detail = _start_agent()
+    if not ok:
+        err = f"could not start pairing agent: {agent_detail}"
+        log.warning(err)
+        status = get_status()
+        status["detail"] = err
+        return status, err
     # Adapter state commands are required: if the adapter never became
     # discoverable/pairable, "pairing mode" would be a lie — fail the request
     # instead of flashing a Pairing UI nothing can see.
@@ -177,9 +335,9 @@ def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | 
         if not ok:
             err = f"bluetoothctl {' '.join(args)} failed: {out or 'no output'}"
             log.warning(err)
-            # Leave the adapter as we found it (best-effort).
-            _run(["discoverable", "off"])
-            _run(["pairable", "off"])
+            # Leave everything as we found it: kill the agent session and
+            # roll the adapter back (best-effort, inside _set_pairing).
+            _set_pairing(False)
             status = get_status()
             status["detail"] = err
             return status, err
