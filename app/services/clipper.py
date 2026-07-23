@@ -7,9 +7,11 @@ dict (jobs are ephemeral — they don't need to survive a restart). All ffmpeg
 nothing here raises into the request path uncaught.
 """
 
+import glob
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -52,6 +54,12 @@ MAX_ACTIVE_JOBS = 8
 # source file stays on disk for clips that already reference it.
 JOB_TTL_SEC = 60 * 60
 
+# Runtime sweep age gate: never touch files younger than this — an in-flight
+# render temp or a just-started download could look orphaned for a moment.
+# Renders time out at 300s and abandoned jobs evict after JOB_TTL_SEC, so an
+# hour is comfortably past both.
+SWEEP_MIN_AGE_SEC = JOB_TTL_SEC
+
 
 def _evict_stale_jobs() -> None:
     """Drop abandoned jobs and their source files (when nothing references
@@ -74,6 +82,98 @@ def _evict_stale_jobs() -> None:
             pass
     if stale:
         log.info("evicted %d stale import job(s)", len(stale))
+
+
+def _cleanup_job_files(job_id: str) -> None:
+    """Remove every sources/<job_id>.* file left by a failed import (partial
+    downloads, failed-postprocessor intermediates). These never got a
+    source_path on the job, so stale-job eviction can't reclaim them."""
+    pattern = os.path.join(config.DATA_DIR, "sources", job_id + ".*")
+    for path in glob.glob(pattern):
+        if db.source_protected(os.path.basename(path)):
+            continue
+        try:
+            os.remove(path)
+            log.info("removed failed-import leftover %s", os.path.basename(path))
+        except OSError:
+            pass
+
+
+_RENDERED_MP3_RE = re.compile(r"^(\d+)\.mp3$")
+
+
+def sweep_orphan_media(startup: bool = False) -> None:
+    """Reconcile media dirs against the DB, deleting files nothing owns:
+
+    - clips|hype/<id>.mp3 with no matching row (cascade delete raced a render,
+      or the FK fired between insert and os.replace). Ids are AUTOINCREMENT —
+      never reused — and a rendered <id>.mp3 only lands after its row exists,
+      so id-without-row is always garbage regardless of age.
+    - *.tmp.*.mp3 render temps (crash mid-render). Age-gated at runtime; at
+      startup no render can be in flight, so they go unconditionally.
+    - sources/ files with no clip/hype row referencing them, no in-flight
+      render using them, and no live import job that could still save them.
+      Age-gated at runtime (a mid-download .part belongs to a live job, but
+      belt and suspenders); at startup jobs never survive the restart, so
+      every unreferenced source is reclaimable immediately.
+
+    Runs at startup and hourly (main.py lifespan task).
+    """
+    now = time.time()
+
+    def _too_young(path: str) -> bool:
+        if startup:
+            return False
+        try:
+            return now - os.path.getmtime(path) < SWEEP_MIN_AGE_SEC
+        except OSError:
+            return True  # vanished mid-sweep — nothing to do
+
+    removed = 0
+    for sub, live_ids_fn in (("clips", db.all_clip_ids), ("hype", db.all_hype_ids)):
+        d = os.path.join(config.DATA_DIR, sub)
+        if not os.path.isdir(d):
+            continue
+        live_ids = live_ids_fn()
+        for name in os.listdir(d):
+            path = os.path.join(d, name)
+            m = _RENDERED_MP3_RE.match(name)
+            if m:
+                if int(m.group(1)) in live_ids:
+                    continue
+            elif ".tmp." in name and name.endswith(".mp3"):
+                if _too_young(path):
+                    continue
+            else:
+                continue  # not ours (photos etc. live elsewhere, but be safe)
+            try:
+                os.remove(path)
+                removed += 1
+                log.info("sweep: removed orphaned %s/%s", sub, name)
+            except OSError:
+                pass
+
+    src_dir = os.path.join(config.DATA_DIR, "sources")
+    if os.path.isdir(src_dir):
+        with _jobs_lock:
+            live_jobs = set(_jobs)
+        for name in os.listdir(src_dir):
+            if name.split(".", 1)[0] in live_jobs:
+                continue  # import in progress or awaiting save
+            if db.source_protected(name):
+                continue  # a saved clip/hype re-edits from it, or render in flight
+            path = os.path.join(src_dir, name)
+            if _too_young(path):
+                continue
+            try:
+                os.remove(path)
+                removed += 1
+                log.info("sweep: removed orphaned sources/%s", name)
+            except OSError:
+                pass
+
+    if removed:
+        log.info("orphan media sweep reclaimed %d file(s)", removed)
 
 
 class JobError(Exception):
@@ -195,6 +295,7 @@ def _run_youtube(job: dict) -> None:
     except Exception as e:  # noqa: BLE001 - yt-dlp raises many types
         job["status"] = "error"
         job["detail"] = f"yt-dlp failed: {e}"
+        _cleanup_job_files(job["job_id"])
         return
     path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ".mp3")
     if not os.path.exists(path):
@@ -203,6 +304,7 @@ def _run_youtube(job: dict) -> None:
             "yt-dlp did not produce an mp3 (source larger than the "
             f"{MAX_UPLOAD_BYTES // (1024 * 1024)}MB limit, or ffmpeg missing)"
         )
+        _cleanup_job_files(job["job_id"])
         return
     _analyze(job, path)
 

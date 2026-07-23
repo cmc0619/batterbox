@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, db
 from .routers import bluetooth, clips, hype, playback, players, settings, teams, wifi
-from .services import audio, gpio
+from .services import audio, clipper, gpio
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -25,18 +25,13 @@ log = logging.getLogger("batterbox")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    # Sweep render temp files orphaned by a crash mid-create/re-render.
-    for sub in ("clips", "hype"):
-        d = os.path.join(config.DATA_DIR, sub)
-        for name in os.listdir(d) if os.path.isdir(d) else []:
-            if ".tmp." in name and name.endswith(".mp3"):
-                try:
-                    os.remove(os.path.join(d, name))
-                    log.info("removed orphaned render temp %s/%s", sub, name)
-                except OSError:
-                    pass
+    # Reclaim files nothing owns (issue #20): orphaned renders, crashed render
+    # temps, and failed-import leftovers in sources/. Once at startup
+    # (unconditional), then hourly in the background (age-gated).
+    clipper.sweep_orphan_media(startup=True)
     audio.ws_manager.loop = asyncio.get_running_loop()
     gpio.init_gpio()
+    sweep_task = asyncio.create_task(_sweep_loop())
     log.info(
         "BatterBox ready (DATA_DIR=%s, AUDIO_BACKEND=%s, MOCK_GPIO=%s)",
         config.DATA_DIR,
@@ -44,6 +39,16 @@ async def lifespan(app: FastAPI):
         config.MOCK_GPIO,
     )
     yield
+    sweep_task.cancel()
+
+
+async def _sweep_loop() -> None:
+    while True:
+        await asyncio.sleep(SWEEP_INTERVAL_SEC)
+        try:
+            await asyncio.to_thread(clipper.sweep_orphan_media)
+        except Exception:  # noqa: BLE001 - sweep must never kill the loop
+            log.exception("orphan media sweep failed")
 
 
 app = FastAPI(title="BatterBox", lifespan=lifespan)
@@ -66,6 +71,7 @@ app.add_middleware(
 # Caddy request_body) is the belt-and-suspenders for those, but there's no
 # proxy in front of this appliance.
 MAX_REQUEST_BYTES = 55 * 1024 * 1024
+SWEEP_INTERVAL_SEC = 60 * 60
 
 
 @app.middleware("http")
