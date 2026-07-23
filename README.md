@@ -58,7 +58,7 @@ At the field, everything plays from local disk. No internet, no problem.
 
 ## Deploy to the Raspberry Pi
 
-Target: Raspberry Pi OS 64-bit (Bookworm or later), Pi 4 or 5 recommended.
+Target: **Raspberry Pi 4 (any RAM), 64-bit Raspberry Pi OS Bookworm** — the one supported platform. Wi-Fi tip: use the 5GHz band when a Bluetooth speaker is paired — Bluetooth shares 2.4GHz airtime and can stutter the audio.
 
 1. **Install Docker:**
 
@@ -67,15 +67,27 @@ Target: Raspberry Pi OS 64-bit (Bookworm or later), Pi 4 or 5 recommended.
    sudo usermod -aG docker $USER   # log out and back in after this
    ```
 
-2. **Clone and start:**
+2. **Get the image onto the Pi.** The image is arm64; an image built on your x86 PC won't run on the Pi. Two ways:
+
+   **Build on the PC, push, pull on the Pi (fastest for the Pi):**
 
    ```bash
-   git clone <your-repo-url> batterbox
-   cd batterbox
+   # on the PC, once:  docker buildx create --use
+   docker buildx build --platform linux/arm64 -t <dockerhub-user>/batterbox:latest --push .
+   # on the Pi:
+   git clone <your-repo-url> batterbox && cd batterbox
+   # point compose at your pushed image:  docker tag <dockerhub-user>/batterbox:latest batterbox-app
+   docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+   ```
+
+   **Or build on the Pi itself** (works fine on a Pi 4, just slow — go warm up the infield):
+
+   ```bash
+   git clone <your-repo-url> batterbox && cd batterbox
    docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --build
    ```
 
-   The first build takes a while on a Pi — go warm up the infield. The app comes up on port 8080 and restarts on reboot automatically (`unless-stopped`).
+   The app comes up on port 80 (and 8080) and restarts on reboot automatically (`unless-stopped`).
 
 3. **Kiosk display** (full-screen touchscreen UI on the Pi's display):
 
@@ -91,7 +103,7 @@ Target: Raspberry Pi OS 64-bit (Bookworm or later), Pi 4 or 5 recommended.
    echo 'if [ -z "$WAYLAND_DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then exec cage -- /home/pi/batterbox/kiosk/start-kiosk.sh; fi' >> ~/.bash_profile
    ```
 
-   On boot: Pi logs itself in on tty1 → cage starts → `start-kiosk.sh` waits for the container and execs Chromium full-screen. Boot-to-music on a Pi 5 is well under a minute.
+   On boot: Pi logs itself in on tty1 → cage starts → `start-kiosk.sh` waits for the container and execs Chromium full-screen. Boot-to-music on a Pi 4 is well under a minute.
 
    **Option B — Raspberry Pi OS with desktop** (what you'd use anyway for other things): keep the stock Wayland/X session and autostart the kiosk into it:
 
@@ -188,6 +200,7 @@ Physical buttons call the same playback API as the touchscreen — one code path
 
 ## Troubleshooting
 
+- **Physical buttons do nothing on the Pi** — check `docker compose logs app` for the `[gpio]` lines from the startup self-check. You want `[gpio] pin factory: LGPIOFactory`. The ERROR lines mean lgpio didn't install (rebuild the image) or `/dev/gpiochip0` isn't mapped (use docker-compose.pi.yml). Silent mock-GPIO fallback on real hardware is exactly what this check exists to catch.
 - **"No audio output device found" warning** — the app couldn't find a sound device. With `browser` backend this is just informational (browsers play their own audio); with `server` backend, check that `/dev/snd` is mapped (Pi compose file), the speaker is plugged in before container start, and try setting `AUDIO_OUTPUT` explicitly (`aplay -l` on the Pi lists devices).
 - **YouTube imports fail** — YouTube changes its internals regularly; yt-dlp answers with frequent releases. Two layers of defense:
   1. **At every container start with internet access, BatterBox auto-upgrades yt-dlp to the latest release** (check `docker compose logs app` for the `[entrypoint] yt-dlp` line). Offline (the field), it silently keeps the baked-in version. Disable with `YTDLP_AUTO_UPDATE=false`.

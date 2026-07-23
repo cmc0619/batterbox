@@ -3,3 +3,6 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.31
 yt-dlp==2026.7.4
 gpiozero==2.0.1; sys_platform == "linux"
+# gpiozero is frontend-only — lgpio is its pin backend on Pi 4 (needs swig +
+# build-essential at pip-build time, installed and purged in the Dockerfile).
+lgpio==0.2.2.0; sys_platform == "linux"

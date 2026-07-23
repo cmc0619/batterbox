@@ -24,6 +24,20 @@ if [ "${YTDLP_AUTO_UPDATE:-true}" = "true" ]; then
     fi
 fi
 
+# GPIO self-check (field debugging): with real GPIO enabled, log the active
+# pin factory. Anything but lgpio on a Pi 4 means physical buttons are DEAD —
+# fail loudly in `docker logs` instead of silently falling back to mock mode.
+# We do not exit: kiosk/audio still work, and a dead container at the field is
+# worse than a visible error.
+if [ "${MOCK_GPIO:-true}" = "false" ]; then
+    FACTORY=$(python -c "import gpiozero; f=gpiozero.Device.pin_factory; print(type(f).__name__ if f else 'None')" 2>/dev/null || echo 'import-error')
+    echo "[gpio] pin factory: ${FACTORY}"
+    if [ "${FACTORY}" != "LGPIOFactory" ]; then
+        echo "[gpio] ERROR: expected LGPIOFactory on a Pi 4 — physical buttons are DEAD." >&2
+        echo "[gpio] ERROR: check lgpio is installed in the image and /dev/gpiochip0 is mapped (docker-compose.pi.yml)." >&2
+    fi
+fi
+
 # PORT is the port INSIDE the container (compose maps host ports onto it:
 # 8080:8080 on PC, additionally 80:8080 on the Pi so phones need no port).
 exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8080}"

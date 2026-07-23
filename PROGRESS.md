@@ -9,7 +9,15 @@
 
 ## In progress
 - [ ] Human eyeball pass: open http://localhost:8080 at 1024×600 and on a phone; check tile layout, long-press feel, drag reorder
-- [ ] Real GPIO test on the Pi (docker-compose.pi.yml)
+- [ ] Real GPIO test on the Pi 4 (docker-compose.pi.yml)
+
+## Pi 4 first-boot checklist (real hardware)
+- [ ] `docker compose logs app` shows `[gpio] pin factory: LGPIOFactory` (ERROR lines = buttons dead: lgpio missing or /dev/gpiochip0 not mapped)
+- [ ] Physical buttons edge-detect: STOP / next batter / volume ±
+- [ ] One Bluetooth speaker: pair via kiosk BT button (or admin) + full playback cycle (BlueZ over mounted D-Bus socket)
+- [ ] Admin Wi-Fi hotspot start/stop via nmcli (container root authorized by NetworkManager polkit)
+- [ ] Radios unblocked: `rfkill list` on first boot if Wi-Fi/BT seems dead
+- [ ] Prefer 5GHz Wi-Fi when a Bluetooth speaker is paired (BT shares 2.4GHz airtime)
 - [ ] Issue #5 — fix implemented (persistent bluetoothctl session over a pty hosts a NoInputNoOutput auto-accept agent for the whole pairing window; auto-answers yes/no prompts, trusts devices on pairing; verified against a stateful bluetoothctl stub); still needs Pi + speaker hardware confirmation
 - [ ] Issue #6 — suspected: Wi-Fi real-radio divergences (rollback paths verified against an nmcli stub only); one-sitting Pi verification checklist in the issue
 

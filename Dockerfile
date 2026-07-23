@@ -9,18 +9,24 @@ FROM python:3.12-slim
 # bluez    — bluetoothctl, drives the Pi's Bluetooth adapter for speaker pairing
 # network-manager — nmcli, drives the host NetworkManager for the admin Wi-Fi
 #            hotspot (a few dozen MB with deps, but it's the supported NM CLI)
+# rfkill   — unblocking Wi-Fi/BT radios on the Pi
+# swig + build-essential — ONLY needed to pip-build lgpio (gpiozero's pin
+#            backend on Pi 4); purged in this same layer so the image stays lean
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg mpv curl bluez network-manager \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends \
+       ffmpeg mpv curl bluez network-manager rfkill \
+       swig build-essential
 
 WORKDIR /srv
 
-# Deps first so app-code changes don't bust the pip layer cache.
-# requirements.txt includes fastapi, uvicorn, pinned yt-dlp, and gpiozero.
-# gpiozero is pure Python so it installs fine on x86 too; the backend falls
-# back to mock GPIO at runtime when real GPIO hardware is absent.
+# requirements.txt includes fastapi, uvicorn, pinned yt-dlp, gpiozero + lgpio.
+# lgpio compiles from source (hence swig/build-essential above); it also builds
+# fine on the x86 dev image, where it simply goes unused (mock GPIO).
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y swig build-essential \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY app/ app/
 COPY static/ static/
@@ -46,8 +52,9 @@ VOLUME /data
 
 EXPOSE 8080
 
-# PORT is baked in at 8080 above; compose always maps host:container as 8080:8080.
+# PORT env is always set (default 8080); the entrypoint honors it, so the
+# healthcheck must too — a hardcoded 8080 breaks when PORT is overridden.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS "http://localhost:8080/api/settings" || exit 1
+    CMD curl -fsS "http://localhost:${PORT}/api/settings" || exit 1
 
 CMD ["./docker-entrypoint.sh"]

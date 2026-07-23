@@ -13,8 +13,9 @@ services:
       - "80:${PORT:-8080}"
     devices:
       # GPIO edge detection for the physical STOP / next-batter / volume
-      # buttons wired to the Pi's header. /dev/gpiomem avoids running the
-      # container privileged.
+      # buttons. lgpio (gpiozero's backend) talks to /dev/gpiochip0 on a Pi 4;
+      # /dev/gpiomem is kept as a harmless fallback for other backends.
+      - /dev/gpiochip0:/dev/gpiochip0
       - /dev/gpiomem:/dev/gpiomem
       # ALSA sound card for server-side playback via mpv.
       - /dev/snd:/dev/snd
