@@ -89,7 +89,7 @@ def patch_hype(hype_id: int, body: ClipPatch):
     if db.get_hype(hype_id) is None:
         raise HTTPException(404, f"hype clip {hype_id} not found")
     try:
-        return clipper.rerender_hype(
+        hype = clipper.rerender_hype(
             hype_id=hype_id,
             trim_start_sec=body.trim_start_sec,
             trim_end_sec=body.trim_end_sec,
@@ -97,6 +97,9 @@ def patch_hype(hype_id: int, body: ClipPatch):
             fade_out_ms=body.fade_out_ms,
             volume_boost_db=body.volume_boost_db,
         )
+        if hype is None:  # deleted during the re-render
+            raise HTTPException(404, f"hype clip {hype_id} not found")
+        return hype
     except clipper.SourceMissingError as e:
         raise HTTPException(409, str(e)) from e
     except clipper.JobError as e:

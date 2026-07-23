@@ -99,7 +99,7 @@ def patch_clip(clip_id: int, body: ClipPatch):
     if db.get_clip(clip_id) is None:
         raise HTTPException(404, f"clip {clip_id} not found")
     try:
-        return clipper.rerender_clip(
+        clip = clipper.rerender_clip(
             clip_id=clip_id,
             trim_start_sec=body.trim_start_sec,
             trim_end_sec=body.trim_end_sec,
@@ -107,6 +107,9 @@ def patch_clip(clip_id: int, body: ClipPatch):
             fade_out_ms=body.fade_out_ms,
             volume_boost_db=body.volume_boost_db,
         )
+        if clip is None:  # deleted during the re-render
+            raise HTTPException(404, f"clip {clip_id} not found")
+        return clip
     except clipper.SourceMissingError as e:
         raise HTTPException(409, str(e)) from e
     except clipper.JobError as e:
