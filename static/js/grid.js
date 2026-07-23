@@ -137,11 +137,14 @@ function buildPlayerEl(player, kind) {
   name.className = 'pname';
   name.textContent = player.name;
   el.appendChild(name);
-  const num = document.createElement('div');
-  num.className = 'jnum';
-  // No number entered -> empty (keeps the element for layout stability).
-  num.textContent = player.jersey_number != null ? `#${player.jersey_number}` : '';
-  el.appendChild(num);
+  // Jersey number under the name only when a photo is shown — with the
+  // jersey-circle placeholder the number is already in the circle (redundant).
+  if (player.photo_url && player.jersey_number != null) {
+    const num = document.createElement('div');
+    num.className = 'jnum';
+    num.textContent = `#${player.jersey_number}`;
+    el.appendChild(num);
+  }
   if (playing && playing.type !== 'hype' && playing.player_id === player.id) {
     el.classList.add('playing');
   }
