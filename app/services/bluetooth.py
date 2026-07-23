@@ -477,6 +477,7 @@ def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | 
         # _pairing so the reader's death-cleanup can't be overwritten.
         agent_alive = _agent_proc is not None and _agent_proc.poll() is None
         if agent_alive:
+            was_pairing = _pairing
             _pairing = True
             _cancel_timer_locked()
             _expire_timer = threading.Timer(duration_sec, _on_expire)
@@ -490,7 +491,10 @@ def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | 
         status["detail"] = err
         return status, err
     log.info("Bluetooth pairing mode on for %ss", duration_sec)
-    _notify_listeners(True)
+    if not was_pairing:
+        # Transitions only, matching _set_pairing: extending an already-open
+        # window must not re-fire the listeners.
+        _notify_listeners(True)
     return get_status(), None
 
 
