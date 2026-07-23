@@ -130,7 +130,10 @@ def sweep_orphan_media(startup: bool = False) -> None:
             return True  # vanished mid-sweep — nothing to do
 
     removed = 0
-    for sub, live_ids_fn in (("clips", db.all_clip_ids), ("hype", db.all_hype_ids)):
+    for sub, live_ids_fn, get_fn in (
+        ("clips", db.all_clip_ids, db.get_clip),
+        ("hype", db.all_hype_ids, db.get_hype),
+    ):
         d = os.path.join(config.DATA_DIR, sub)
         if not os.path.isdir(d):
             continue
@@ -139,7 +142,15 @@ def sweep_orphan_media(startup: bool = False) -> None:
             path = os.path.join(d, name)
             m = _RENDERED_MP3_RE.match(name)
             if m:
-                if int(m.group(1)) in live_ids:
+                item_id = int(m.group(1))
+                if item_id in live_ids:
+                    continue
+                # The id-set snapshot predates the listdir, so a clip saved
+                # while we walk the dir (row insert, then <id>.mp3 lands)
+                # would look orphaned. Confirm against the live DB before
+                # deleting: a row present now owns the file; a row absent now
+                # can never appear later (AUTOINCREMENT ids aren't reused).
+                if get_fn(item_id) is not None:
                     continue
             elif ".tmp." in name and name.endswith(".mp3"):
                 if _too_young(path):

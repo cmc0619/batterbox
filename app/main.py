@@ -28,7 +28,10 @@ async def lifespan(app: FastAPI):
     # Reclaim files nothing owns (issue #20): orphaned renders, crashed render
     # temps, and failed-import leftovers in sources/. Once at startup
     # (unconditional), then hourly in the background (age-gated).
-    clipper.sweep_orphan_media(startup=True)
+    try:
+        clipper.sweep_orphan_media(startup=True)
+    except Exception:  # noqa: BLE001 - a cleanup failure must never block boot
+        log.exception("startup orphan media sweep failed")
     audio.ws_manager.loop = asyncio.get_running_loop()
     gpio.init_gpio()
     sweep_task = asyncio.create_task(_sweep_loop())
@@ -40,6 +43,10 @@ async def lifespan(app: FastAPI):
     )
     yield
     sweep_task.cancel()
+    try:
+        await sweep_task  # confirm teardown (waits out a mid-flight sweep)
+    except asyncio.CancelledError:
+        pass
 
 
 async def _sweep_loop() -> None:
