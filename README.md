@@ -115,6 +115,8 @@ Target: **Raspberry Pi 4 (any RAM), 64-bit Raspberry Pi OS Bookworm** — the on
 
    Either way the kiosk script waits for the app to answer on port 8080, then opens Chromium full-screen. Audio plays through the browser out the 3.5mm jack / HDMI / USB DAC — plug your speaker/PA into the Pi.
 
+   **On-screen keyboard (no physical keyboard attached):** install `squeekboard` on the Pi (`sudo apt install squeekboard`). The kiosk launcher starts it automatically when present — it pops up whenever a text field (Wi-Fi SSID/password, player names, YouTube URLs) gains focus and hides after. Without it, text fields are unreachable on the touchscreen. **Lockout recovery even without an OSK:** the Wi-Fi **Start Hotspot** button needs no typing (it uses the stored SSID/password) — kiosk → ADMIN → Start Hotspot → join `BatterBox` from a phone → fix Wi-Fi from the phone's browser.
+
 4. **Networking at the field** — two ways to get phones and the Pi on the same network:
 
    **Option A — Pi joins an existing Wi-Fi network (client mode).** Either your iPhone's Personal Hotspot (gives the Pi internet as a side effect — YouTube imports and the yt-dlp auto-update keep working at the field) or any home/field Wi-Fi. Easiest: Admin → **Wi-Fi Hotspot** section → put the network's SSID + password in the box → **Use Wi-Fi** (blank password = open network). From the Pi console instead:

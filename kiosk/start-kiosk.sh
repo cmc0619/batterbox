@@ -6,14 +6,15 @@
 # No desktop environment (KDE/Gnome) is required — pick one display path:
 #
 # A) Raspberry Pi OS Lite + cage (recommended, no desktop at all):
-#      sudo apt install -y cage chromium
+#      sudo apt install -y cage chromium squeekboard
 #      sudo raspi-config  # System Options → Boot / Auto Login → Console Autologin
 #      ~/.bash_profile:
 #        if [ -z "$WAYLAND_DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
 #          exec cage -- /home/pi/batterbox/kiosk/start-kiosk.sh
 #        fi
 #    (cage IS the entire window system — a tiny Wayland kiosk compositor that
-#     runs this one script full-screen; Chromium speaks Wayland to it natively.)
+#     runs this one script full-screen; Chromium speaks Wayland to it natively.
+#     squeekboard = on-screen keyboard, started below if installed.)
 #
 # B) Raspberry Pi OS with desktop (autostart into the stock session):
 #      mkdir -p ~/.config/autostart
@@ -52,6 +53,19 @@ if [ -z "${CHROMIUM}" ]; then
     echo "[batterbox-kiosk] ERROR: no Chromium found (tried chromium-browser, chromium)." >&2
     echo "[batterbox-kiosk] Install it with: sudo apt install chromium-browser" >&2
     exit 1
+fi
+
+# On-screen keyboard: with no physical keyboard attached, text fields (Wi-Fi
+# SSID/password, player names, YouTube URLs) are dead ends without one.
+# squeekboard is a Wayland OSK that pops up when a text input gains focus and
+# hides when it loses it — works under cage and the Pi OS desktop session.
+# Install on the Pi with: sudo apt install squeekboard
+OSK_PID=""
+if command -v squeekboard >/dev/null 2>&1; then
+    echo "[batterbox-kiosk] starting squeekboard on-screen keyboard"
+    squeekboard &
+    OSK_PID=$!
+    trap '[ -n "${OSK_PID}" ] && kill "${OSK_PID}" 2>/dev/null' EXIT
 fi
 
 echo "[batterbox-kiosk] launching ${CHROMIUM} in kiosk mode at ${URL}"

@@ -18,6 +18,7 @@
 - [ ] Admin Wi-Fi hotspot start/stop via nmcli (container root authorized by NetworkManager polkit)
 - [ ] Radios unblocked: `rfkill list` on first boot if Wi-Fi/BT seems dead
 - [ ] Prefer 5GHz Wi-Fi when a Bluetooth speaker is paired (BT shares 2.4GHz airtime)
+- [ ] `sudo apt install squeekboard` — on-screen keyboard pops on text-field focus (Wi-Fi SSID, player names) under cage; if it doesn't appear, check cage/Chromium text-input protocol support
 - [ ] Issue #5 — fix implemented (persistent bluetoothctl session over a pty hosts a NoInputNoOutput auto-accept agent for the whole pairing window; auto-answers yes/no prompts, trusts devices on pairing; verified against a stateful bluetoothctl stub); still needs Pi + speaker hardware confirmation
 - [ ] Issue #6 — suspected: Wi-Fi real-radio divergences (rollback paths verified against an nmcli stub only); one-sitting Pi verification checklist in the issue
 
