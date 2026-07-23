@@ -2,6 +2,9 @@
 
 Big league music for big league moments. Raspberry Pi–hosted walk-up song player. Full spec context lives in git history and `PROGRESS.md`.
 
+> ## ⛔ CODE FREEZE (owner directive, 2026-07-23)
+> **No changes to application code — `app/**` (Python) or `static/**` (JS/HTML/CSS) — without the owner's explicit approval BEFORE the change. Ask first, every time, no exceptions.** Docker (Dockerfile, compose files, entrypoint script), docs, README, this file, PROGRESS.md, seed data, and other non-code repo files may be changed autonomously.
+
 ## Commands
 
 - Dev run: `docker compose up --build` → http://localhost:8080
