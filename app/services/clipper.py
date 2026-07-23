@@ -509,12 +509,25 @@ def rerender_clip(
 ) -> dict:
     """Re-render a saved clip from its stored source. Returns None if the clip
     was deleted during the render (router turns that into a 404)."""
-    src = _source_path(db.get_clip_source_file(clip_id))
-    # Same lock delete_clip holds, so a direct delete can't interleave.
+    # Everything — source lookup included — runs under the lock delete_clip
+    # holds, so a direct delete can't unlink the source mid-lookup/render (that
+    # would surface as a 500 instead of the clean 404 for a deleted clip).
     with db.item_lock("clips", clip_id):
-        duration = _render_to_file(
-            src, "clips", clip_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-        )
+        if db.get_clip(clip_id) is None:
+            return None  # deleted before we acquired the lock
+        try:
+            src = _source_path(db.get_clip_source_file(clip_id))
+            duration = _render_to_file(
+                src, "clips", clip_id, trim_start_sec, trim_end_sec,
+                fade_in_ms, fade_out_ms,
+            )
+        except (RenderError, SourceMissingError):
+            # If the row vanished (cascade delete of the owning player/team,
+            # which bypasses the per-item lock), report it as deleted, not as
+            # a source/render error.
+            if db.get_clip(clip_id) is None:
+                return None
+            raise
         updated = db.update_clip_trim(
             clip_id,
             duration_sec=duration,
@@ -525,8 +538,6 @@ def rerender_clip(
             volume_boost_db=volume_boost_db,
         )
         if not updated:
-            # Row gone (cascade delete of the player/team, which bypasses the
-            # per-item lock) — don't leave the freshly-written mp3 orphaned.
             _discard_render("clips", clip_id)
             return None
     return db.get_clip(clip_id)
@@ -542,11 +553,19 @@ def rerender_hype(
 ) -> dict:
     """Re-render a saved hype clip from its stored source. Returns None if the
     hype clip was deleted during the render (router turns that into a 404)."""
-    src = _source_path(db.get_hype_source_file(hype_id))
     with db.item_lock("hype", hype_id):
-        duration = _render_to_file(
-            src, "hype", hype_id, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
-        )
+        if db.get_hype(hype_id) is None:
+            return None  # deleted before we acquired the lock
+        try:
+            src = _source_path(db.get_hype_source_file(hype_id))
+            duration = _render_to_file(
+                src, "hype", hype_id, trim_start_sec, trim_end_sec,
+                fade_in_ms, fade_out_ms,
+            )
+        except (RenderError, SourceMissingError):
+            if db.get_hype(hype_id) is None:
+                return None
+            raise
         updated = db.update_hype_trim(
             hype_id,
             duration_sec=duration,
