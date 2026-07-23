@@ -35,6 +35,11 @@ _pairing_listeners: list = []  # fn(active: bool), e.g. the GPIO pairing LED
 _agent_proc: subprocess.Popen | None = None
 _agent_fd: int | None = None  # pty master; a pty keeps bluetoothctl unbuffered
 _agent_reader: threading.Thread | None = None
+# Registration handshake: writing to the pty only proves the command was
+# sent, not that BlueZ accepted the agent. The reader thread reports the
+# outcome here; enter_pairing must not open the window without confirmation.
+_agent_confirm = threading.Event()
+_agent_confirm_ok = False  # guarded by _lock
 
 _MAC_RE = re.compile(r"^Device\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s*(.*)$")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|[\x01\x02\r]")
@@ -107,6 +112,14 @@ def _list_devices() -> list[dict]:
     return devices
 
 
+def _set_agent_confirm(ok: bool) -> None:
+    """Record the agent-registration outcome and wake the waiter."""
+    global _agent_confirm_ok
+    with _lock:
+        _agent_confirm_ok = ok
+    _agent_confirm.set()
+
+
 def _agent_send(cmd: str) -> bool:
     """Write one command into the live agent session. Never raises."""
     with _lock:
@@ -152,7 +165,19 @@ def _agent_reader_loop(fd: int, proc: subprocess.Popen) -> None:
                     trusted.add(mac)
                     log.info("Bluetooth device %s paired; trusting it", mac)
                     _agent_send(f"trust {mac}")
-            elif "Agent registered" in line or "Default agent request successful" in line:
+            elif "Default agent request successful" in line:
+                # default-agent only succeeds with an agent registered, so
+                # this one line confirms the whole registration sequence.
+                log.info("bluetoothctl: %s", line)
+                _set_agent_confirm(ok=True)
+            elif (
+                "Default agent request failed" in line
+                or "Failed to register agent" in line
+                or "No agent is registered" in line
+            ):
+                log.warning("bluetoothctl: %s", line)
+                _set_agent_confirm(ok=False)
+            elif "Agent registered" in line:
                 log.info("bluetoothctl: %s", line)
         # Prompts don't end with a newline, so they sit in the partial tail.
         if "(yes/no)" in buf:
@@ -161,14 +186,28 @@ def _agent_reader_loop(fd: int, proc: subprocess.Popen) -> None:
             buf = ""
         elif len(buf) > 4096:  # unterminated garbage; don't grow unbounded
             buf = buf[-1024:]
-    log.info("bluetoothctl agent session ended (rc=%s)", proc.poll())
+    rc = proc.poll()
+    with _lock:
+        died_unexpectedly = _agent_proc is proc  # _stop_agent nulls this first
+    if died_unexpectedly:
+        log.warning(
+            "bluetoothctl agent session died unexpectedly (rc=%s); "
+            "exiting pairing mode — no agent means pairing can't be accepted",
+            rc,
+        )
+        _set_pairing(False)
+    else:
+        log.info("bluetoothctl agent session ended (rc=%s)", rc)
 
 
 def _start_agent() -> tuple[bool, str]:
-    """Ensure the persistent agent session is running. Returns (ok, detail)."""
-    global _agent_proc, _agent_fd, _agent_reader
+    """Ensure the persistent agent session is running with its agent confirmed
+    registered by BlueZ. Returns (ok, detail)."""
+    global _agent_proc, _agent_fd, _agent_reader, _agent_confirm_ok
     with _lock:
         if _agent_proc is not None and _agent_proc.poll() is None:
+            # Confirmed at start; a session that lost its agent would have
+            # been torn down, not left running.
             return True, "pairing agent already running"
         # Clean up a session that died on its own (e.g. bluetoothd restart).
         _agent_proc = None
@@ -197,6 +236,8 @@ def _start_agent() -> tuple[bool, str]:
         os.close(slave)
         _agent_proc = proc
         _agent_fd = master
+        _agent_confirm.clear()
+        _agent_confirm_ok = False
         _agent_reader = threading.Thread(
             target=_agent_reader_loop,
             args=(master, proc),
@@ -208,6 +249,20 @@ def _start_agent() -> tuple[bool, str]:
         # swap it for NoInputNoOutput so pairing is auto-accepted (no PIN).
         for cmd in ("agent off", "agent NoInputNoOutput", "default-agent"):
             _agent_send(cmd)
+    # Wait for BlueZ to confirm — outside the lock so the reader can run.
+    # Writing to the pty proves nothing; registration can be rejected.
+    confirmed = _agent_confirm.wait(timeout=_CMD_TIMEOUT)
+    with _lock:
+        ok = confirmed and _agent_confirm_ok
+    if not ok:
+        detail = (
+            "BlueZ rejected the pairing agent registration"
+            if confirmed
+            else "bluetoothctl did not confirm agent registration in time"
+        )
+        log.warning("%s; closing agent session", detail)
+        _stop_agent()
+        return False, detail
     log.info("bluetoothctl agent session started (pid %s)", proc.pid)
     return True, "pairing agent started"
 
@@ -235,7 +290,11 @@ def _stop_agent() -> None:
             log.warning("bluetoothctl agent session did not die on kill")
     except Exception:  # noqa: BLE001
         pass
-    if reader is not None and reader.is_alive():
+    if (
+        reader is not None
+        and reader is not threading.current_thread()  # reader may be the caller
+        and reader.is_alive()
+    ):
         reader.join(timeout=2)
     if fd is not None:
         try:
@@ -249,6 +308,7 @@ atexit.register(_stop_agent)
 
 
 def _notify_listeners(active: bool) -> None:
+    """Tell registered listeners (e.g. the pairing LED) the new pairing state."""
     for fn in list(_pairing_listeners):
         try:
             fn(active)
@@ -263,11 +323,13 @@ def add_pairing_listener(fn) -> None:
 
 
 def is_pairing() -> bool:
+    """True while the pairing window is open."""
     with _lock:
         return _pairing
 
 
 def get_status() -> dict:
+    """Full status dict for the API: availability, pairing state, devices."""
     available, detail = _detect()
     if not available:
         return {"available": False, "pairing": False, "detail": detail, "devices": []}
@@ -280,6 +342,7 @@ def get_status() -> dict:
 
 
 def _cancel_timer_locked() -> None:
+    """Cancel the window-expiry timer. Caller must hold _lock."""
     global _expire_timer
     if _expire_timer is not None:
         _expire_timer.cancel()
@@ -287,11 +350,13 @@ def _cancel_timer_locked() -> None:
 
 
 def _on_expire() -> None:
+    """Timer callback: the pairing window ran out."""
     log.info("Bluetooth pairing window expired")
     _set_pairing(False)
 
 
 def _set_pairing(active: bool) -> None:
+    """Flip pairing state; on exit also tear down the agent and adapter."""
     global _pairing
     with _lock:
         _pairing = active
@@ -354,6 +419,7 @@ def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | 
 
 
 def exit_pairing() -> dict:
+    """Close the pairing window early (idempotent)."""
     if is_pairing():
         log.info("Bluetooth pairing mode off")
     _set_pairing(False)
