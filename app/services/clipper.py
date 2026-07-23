@@ -435,8 +435,10 @@ def _discard_render(dst_dir: str, item_id: int) -> None:
     delete of the owning player/team, which doesn't take the per-item lock)."""
     try:
         os.remove(os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.mp3"))
-    except OSError:
-        pass
+    except FileNotFoundError:
+        pass  # already removed by the cascade delete — expected
+    except OSError as e:  # e.g. permission error — don't mask a real fs problem
+        log.warning("could not discard orphaned render %s/%s.mp3: %s", dst_dir, item_id, e)
 
 
 def _render_to_temp(
@@ -506,7 +508,7 @@ def rerender_clip(
     fade_in_ms: int,
     fade_out_ms: int,
     volume_boost_db: float,
-) -> dict:
+) -> dict | None:
     """Re-render a saved clip from its stored source. Returns None if the clip
     was deleted during the render (router turns that into a 404)."""
     # Everything — source lookup included — runs under the lock delete_clip
@@ -550,7 +552,7 @@ def rerender_hype(
     fade_in_ms: int,
     fade_out_ms: int,
     volume_boost_db: float,
-) -> dict:
+) -> dict | None:
     """Re-render a saved hype clip from its stored source. Returns None if the
     hype clip was deleted during the render (router turns that into a 404)."""
     with db.item_lock("hype", hype_id):
