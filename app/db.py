@@ -570,6 +570,13 @@ def get_clip(clip_id: int) -> dict | None:
     return _clip_to_dict(row) if row else None
 
 
+def all_clip_ids() -> set[int]:
+    """Internal: ids of every clip row (orphan-file sweep)."""
+    with _lock:
+        rows = get_conn().execute("SELECT id FROM clips").fetchall()
+    return {r["id"] for r in rows}
+
+
 def get_active_clip(player_id: int, clip_type: str) -> dict | None:
     with _lock:
         row = get_conn().execute(
@@ -801,6 +808,13 @@ def get_hype(hype_id: int) -> dict | None:
     with _lock:
         row = get_conn().execute("SELECT * FROM hype WHERE id = ?", (hype_id,)).fetchone()
     return _hype_to_dict(row) if row else None
+
+
+def all_hype_ids() -> set[int]:
+    """Internal: ids of every hype row (orphan-file sweep)."""
+    with _lock:
+        rows = get_conn().execute("SELECT id FROM hype").fetchall()
+    return {r["id"] for r in rows}
 
 
 def insert_hype(
