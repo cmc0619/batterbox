@@ -59,11 +59,13 @@ function hypeTitle() {
   return hypeTitleInput.value.trim();
 }
 
-// An import needs a player AND a clip type; with either missing there is no slot
-// to file the clip under, and guessing one is how clips end up in the wrong
-// section. Checked before every import and before the save.
+// An import needs a real player AND a clip type; with either missing there is no
+// slot to file the clip under, and guessing one is how clips end up in the wrong
+// section. Checked at boot, before every import and before the save.
+// `Number()` turns a junk ?player_id into NaN (falsy) but leaves -1, 1.5 and
+// Infinity truthy — none of which is a row id — so check the shape, not truthiness.
 function importTargetOk() {
-  if (playerId && clipType) return true;
+  if (Number.isSafeInteger(playerId) && playerId > 0 && clipType) return true;
   showBanner('Missing player or clip type — open this page from Admin → Add Clip.');
   return false;
 }
@@ -367,11 +369,10 @@ async function bootHypeReedit() {
     hypeTitleInput.focus();
     return;
   }
-  if (!playerId || !clipType) {
+  if (!importTargetOk()) {
     // Same refusal for a bad type as for a bad player: without both, this page
     // cannot know which slot the clip belongs in, and importing anyway is what
-    // put home-run songs in walk-up sections.
-    showBanner('Missing player or clip type — open this page from Admin → Add Clip.');
+    // put home-run songs in walk-up sections. (importTargetOk shows the banner.)
     document.getElementById('import-section').style.display = 'none';
     return;
   }
