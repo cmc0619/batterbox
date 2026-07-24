@@ -18,7 +18,14 @@ const hypeImportMode = params.get('hype') === '1'; // ?hype=1 imports a hype cli
 const reeditMode = clipId > 0; // ?clip_id=N re-opens a saved player clip's trim
 const hypeReeditMode = hypeClipId > 0; // ?hype_clip_id=N re-opens a hype clip's trim
 const typeParam = params.get('type');
-let clipType = ['walkup', 'homerun', 'walkout'].includes(typeParam) ? typeParam : 'walkup';
+// NO SILENT DEFAULT. A missing/unknown ?type used to fall back to 'walkup', so an
+// editor link that lost its type (hand-typed, shared, truncated) quietly turned a
+// home-run import into a walk-up clip — the page even titled itself WALKUP and the
+// server accepted it. null here; the boot guard refuses import mode without it.
+let clipType = ['walkup', 'homerun', 'walkout'].includes(typeParam) ? typeParam : null;
+// Plain clip import (not a re-edit, not hype) — the only mode that needs
+// player_id + type, because it's the mode that decides where a new clip lands.
+const clipImportMode = !reeditMode && !hypeReeditMode && !hypeImportMode;
 
 const banner = document.getElementById('warn-banner');
 const jobStatus = document.getElementById('job-status');
@@ -51,6 +58,17 @@ function setJobStatus(msg, isError = false) {
 
 function hypeTitle() {
   return hypeTitleInput.value.trim();
+}
+
+// An import needs a real player AND a clip type; with either missing there is no
+// slot to file the clip under, and guessing one is how clips end up in the wrong
+// section. Checked at boot, before every import and before the save.
+// `Number()` turns a junk ?player_id into NaN (falsy) but leaves -1, 1.5 and
+// Infinity truthy — none of which is a row id — so check the shape, not truthiness.
+function importTargetOk() {
+  if (Number.isSafeInteger(playerId) && playerId > 0 && clipType) return true;
+  showBanner('Missing player or clip type — open this page from Admin → Add Clip.');
+  return false;
 }
 
 async function resolvePlayerName(pid) {
@@ -140,6 +158,7 @@ document.getElementById('btn-yt').addEventListener('click', () => {
     }));
     return;
   }
+  if (!importTargetOk()) return;
   startJob(BB.api('/api/clips/import/youtube', {
     method: 'POST',
     body: { player_id: playerId, type: clipType, url },
@@ -161,6 +180,7 @@ document.getElementById('btn-upload').addEventListener('click', () => {
     }));
     return;
   }
+  if (!importTargetOk()) return;
   startJob(BB.api(`/api/clips/import/upload?player_id=${playerId}&type=${clipType}`, {
     method: 'POST',
     formData: fd,
@@ -254,6 +274,7 @@ saveBtn.addEventListener('click', async () => {
     showBanner('Enter a hype clip title.');
     return;
   }
+  if (clipImportMode && !importTargetOk()) return;
   saveBtn.disabled = true;
   try {
     if (hypeReeditMode) {
@@ -362,8 +383,10 @@ async function bootHypeReedit() {
     hypeTitleInput.focus();
     return;
   }
-  if (!playerId) {
-    showBanner('Missing player_id — open this page from Admin → Add Clip.');
+  if (!importTargetOk()) {
+    // Same refusal for a bad type as for a bad player: without both, this page
+    // cannot know which slot the clip belongs in, and importing anyway is what
+    // put home-run songs in walk-up sections. (importTargetOk shows the banner.)
     document.getElementById('import-section').style.display = 'none';
     return;
   }

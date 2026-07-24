@@ -65,6 +65,14 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
 - `POST /api/clips/import/youtube` `{ "player_id", "type", "url" }` → `{ "job_id" }` (async; single video only — playlists are not expanded; downloads are size-capped at 50MB)
 - `POST /api/clips/import/upload?player_id=1&type=walkup` multipart `file` (mp3/m4a, ≤50MB) → `{ "job_id" }` (async)
 
+  **The job is bound to the slot it was imported for.** `player_id` + `type` are
+  recorded on the job, and `POST /api/clips` must save into that same slot — a
+  mismatch is **400**, not a silently mis-filed clip (the save's `type` used to be
+  the only thing deciding where the clip landed, so a home-run import saved as
+  `walkup` filed the home-run audio in the walk-up section). A hype import job is
+  bound as hype: saving it via `POST /api/clips` is 400, and a player-clip job
+  saved via `POST /api/hype` is 400.
+
   Import limits (both endpoints, and the hype equivalents): sources longer than **30 minutes** fail analysis with a clear job error (decoded PCM of unbounded sources can exhaust Pi memory), and at most **8 imports** may be pending/processing at once — the 9th returns **429** with detail.
 
   Body-size handling for all multipart uploads (audio import and player photo): a request whose `Content-Length` exceeds **55MB** is rejected with **413** by middleware before the body is parsed; within that, the per-endpoint caps still apply and return **400** (`file must be 50MB or smaller` for audio, `photo must be 5MB or smaller`). Chunked uploads without a `Content-Length` skip the 413 and are caught by the per-handler cap.
@@ -74,7 +82,7 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
      "source_audio_url": "/media/sources/abc.mp3", "peaks": [0.12, ...] }`
   (`peaks`: ~800 floats 0–1 for instant waveform render; `suggested_*` = loudest default_snippet_length window, fallback 0→length).
   **Expiry:** a `job_id` **may** be evicted ~1 hour after creation (its unsaved source file is reclaimed then). Eviction runs opportunistically on job creation and on `GET /api/jobs/{id}`, so the TTL is a lower bound, not a hard cutoff: once eviction fires, `GET /api/jobs/{expired}` → **404** and `POST /api/clips`|`/api/hype` with that id → **400** `unknown job_id`; but a job still in memory can be saved past the nominal hour (polling stops once a job is `done`, so nothing forces eviction in the meantime). Clients should stop polling on 404 and re-import. Import → trim → save takes seconds, so this only bites abandoned jobs.
-- `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type). Same trim validation as PATCH (`0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, fades ≥ 0) → 400 on violation, checked before anything is saved. Field bounds (rejected with **422**): `volume_boost_db` −24…+24 (the editor UI caps at ±12); all float fields reject NaN/Infinity.
+- `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type). `player_id`/`type` must match the slot the job was imported for → **400** otherwise (`this import was started for player N's <type> clip, ...`). Same trim validation as PATCH (`0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, fades ≥ 0) → 400 on violation, checked before anything is saved. Field bounds (rejected with **422**): `volume_boost_db` −24…+24 (the editor UI caps at ±12); all float fields reject NaN/Infinity.
 - `GET /api/clips/{id}/edit_context` →
   `{ "clip": <clip object>, "source_audio_url": "/media/sources/abc.mp3", "duration_sec": 213.4, "peaks": [0.12, ...] }`
   (re-opens a saved clip in the trim editor; `duration_sec`/`peaks` describe the FULL source audio, like the job response).
@@ -100,7 +108,7 @@ Hype clip object:
 - `GET /api/hype` → `[hype clip]`
 - `POST /api/hype/import/youtube` `{ "title", "url" }` → `{ "job_id" }` (async, 202; same job pipeline / `GET /api/jobs/{job_id}` as player clips)
 - `POST /api/hype/import/upload?title=X` multipart `file` (mp3/m4a, ≤50MB) → `{ "job_id" }` (async, 202)
-- `POST /api/hype` `{ "job_id", "title", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → hype clip (201; same ffmpeg slice + fades + loudnorm → 192k MP3 render as player clips). Same trim validation as PATCH → 400 on violation, checked before anything is saved.
+- `POST /api/hype` `{ "job_id", "title", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → hype clip (201; same ffmpeg slice + fades + loudnorm → 192k MP3 render as player clips). The job must have come from a hype import → **400** otherwise. Same trim validation as PATCH → 400 on violation, checked before anything is saved.
 - `GET /api/hype/{id}/edit_context` → `{ "hype": <hype clip object>, "source_audio_url", "duration_sec", "peaks" }` — same shape as the player-clip version but with `"hype"` instead of `"clip"`. 404 if missing; 409 if no stored source / source file gone.
 - `PATCH /api/hype/{id}` `{ "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` (all required) → updated hype clip (re-renders from the stored source, temp-file-then-move, updates `duration_sec`). Same semantics/errors as player clips: 404 missing, 409 source gone, 400 on validation failure.
 - `DELETE /api/hype/{id}` → 204 (removes file)
