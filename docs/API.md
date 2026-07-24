@@ -91,7 +91,7 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
   (re-renders from the clip's stored source with the same ffmpeg slice + fades + loudnorm → 192k MP3 pipeline; overwrites the clip's audio file via temp-file-then-move so a failed render never leaves a half-written mp3; updates `duration_sec`).
   Validation: `0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, fades ≥ 0 → 400 on violation; `volume_boost_db` −24…+24 and no NaN/Infinity → **422** on violation; 404 if clip missing; 409 on missing source (same as edit_context). Note: a clip saved before these bounds existed with `|volume_boost_db| > 24` can no longer be PATCHed until the boost is brought into range (the editor UI already caps at ±12, so only hand-crafted requests hit this).
 - `POST /api/clips/{id}/activate` → clip (clears is_active on sibling clips of same player+type)
-- `DELETE /api/clips/{id}` → 204 (removes file; clears active flag)
+- `DELETE /api/clips/{id}` → 204 (removes the row + its mp3, and the trim source when nothing else references it). Deleting the **active** clip of a slot promotes the earliest remaining clip of that player+type to active in the same transaction, so a slot that still has clips never ends up with none active (deleting the last clip of a slot leaves it empty, as before)
 
 ## Hype clips
 

@@ -41,6 +41,7 @@ let regions = null;
 let region = null;
 let jobId = null;
 let pollTimer = null;
+let saved = false;      // a save completed; this page is spent (see `pageshow`)
 
 /* ---------------- helpers ---------------- */
 
@@ -291,11 +292,24 @@ saveBtn.addEventListener('click', async () => {
         body: { job_id: jobId, player_id: playerId, type: clipType, ...body },
       });
     }
+    saved = true;
     location.href = 'admin.html';
   } catch (err) {
     saveBtn.disabled = false;
     showBanner(`Save failed: ${err.message}`);
   }
+});
+
+// A saved page leaves for admin.html with SAVE still disabled — correct while
+// the navigation is in flight, but phone browsers restore that exact page from
+// the back-forward cache when the user taps Back: dead SAVE button, stale job
+// id, and nothing on screen explaining it (a reload is the only way out, which
+// nobody guesses). Re-enabling the button instead would be worse — the stale
+// job would save the same clip a second time. So a page whose work is done
+// reloads itself into a clean editor. A restore WITHOUT a completed save keeps
+// its state, which is the useful case (back out of admin, keep trimming).
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted && saved) location.reload();
 });
 
 /* ---------------- re-edit mode (?clip_id=N / ?hype_clip_id=N) ---------------- */

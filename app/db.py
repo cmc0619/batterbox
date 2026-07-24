@@ -762,19 +762,49 @@ def delete_clip(clip_id: int, remove_source: bool = True) -> bool:
     if nothing else references it. `remove_source=False` keeps the source —
     used when rolling back a failed create so a retry can re-render from it.
 
+    Deleting the ACTIVE clip of a slot promotes the earliest remaining clip of
+    that player+type, so a slot that still has clips always has one active.
+
     Held under the per-item lock so it can't interleave with a re-render of the
     same clip (which would otherwise re-create the deleted <id>.mp3)."""
     with item_lock("clips", clip_id):
         with _lock:
             conn = get_conn()
             row = conn.execute(
-                "SELECT source_file FROM clips WHERE id = ?", (clip_id,)
+                "SELECT player_id, type, is_active, source_file FROM clips"
+                " WHERE id = ?",
+                (clip_id,),
             ).fetchone()
             cur = conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
+            promoted = None
+            if cur.rowcount and row and row["is_active"]:
+                # Deleting the active clip used to leave the slot with clips but
+                # none active: the kiosk tile 404s ("no active walkup clip") and
+                # admin shows "walkup —" until someone spots it and taps
+                # Activate — a bad surprise mid-game after a routine cleanup.
+                # Earliest remaining (lowest id = top of the admin list), which
+                # matches "first clip of a player+type becomes active" on insert.
+                # Same transaction as the DELETE, so the slot is never observed
+                # clip-ful but active-less.
+                nxt = conn.execute(
+                    "SELECT id FROM clips WHERE player_id = ? AND type = ?"
+                    " ORDER BY id LIMIT 1",
+                    (row["player_id"], row["type"]),
+                ).fetchone()
+                if nxt:
+                    conn.execute(
+                        "UPDATE clips SET is_active = 1 WHERE id = ?", (nxt["id"],)
+                    )
+                    promoted = nxt["id"]
             conn.commit()
         if cur.rowcount:
             sources = [row["source_file"]] if (row and remove_source) else []
             _remove_files([clip_id], [], sources)
+            if promoted is not None:
+                log.info(
+                    "deleted active clip %d; promoted clip %d to active (%s)",
+                    clip_id, promoted, row["type"],
+                )
         return cur.rowcount > 0
 
 
