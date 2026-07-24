@@ -221,7 +221,15 @@ def job_public(job: dict) -> dict:
     }
 
 
-def _new_job(source: str, source_url: str | None) -> dict:
+def _clip_owner(player_id: int, clip_type: str) -> dict:
+    return {"kind": "clip", "player_id": player_id, "clip_type": clip_type}
+
+
+def _hype_owner() -> dict:
+    return {"kind": "hype"}
+
+
+def _new_job(source: str, source_url: str | None, owner: dict) -> dict:
     _evict_stale_jobs()
     with _jobs_lock:
         active = sum(
@@ -237,6 +245,12 @@ def _new_job(source: str, source_url: str | None) -> dict:
             "detail": "",
             "source": source,
             "source_url": source_url,
+            # The slot this import was started for. The save re-sends player/type
+            # from client state, and nothing used to compare the two — so a clip
+            # could be filed under a slot that had nothing to do with the audio
+            # that was imported (a home-run import saved as a walk-up clip).
+            # `owner` is the authority; saves must match it.
+            "owner": owner,
             "created_mono": time.monotonic(),
         }
         _jobs[job["job_id"]] = job
@@ -244,13 +258,13 @@ def _new_job(source: str, source_url: str | None) -> dict:
 
 
 def start_youtube_job(player_id: int, clip_type: str, url: str) -> dict:
-    job = _new_job("youtube", url)
+    job = _new_job("youtube", url, _clip_owner(player_id, clip_type))
     _executor.submit(_run_youtube, job)
     return job
 
 
 def start_upload_job(player_id: int, clip_type: str, ext: str, data: bytes) -> dict:
-    job = _new_job("upload", None)
+    job = _new_job("upload", None, _clip_owner(player_id, clip_type))
     path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ext)
     with open(path, "wb") as f:
         f.write(data)
@@ -259,16 +273,17 @@ def start_upload_job(player_id: int, clip_type: str, ext: str, data: bytes) -> d
 
 
 # Hype imports run through the exact same job pipeline; the title is collected
-# again at create time, so the job itself doesn't need to carry it.
+# again at create time, so the job carries only the kind — enough to keep a hype
+# import from being saved as a player clip (and vice versa).
 
 def start_hype_youtube_job(url: str) -> dict:
-    job = _new_job("youtube", url)
+    job = _new_job("youtube", url, _hype_owner())
     _executor.submit(_run_youtube, job)
     return job
 
 
 def start_hype_upload_job(ext: str, data: bytes) -> dict:
-    job = _new_job("upload", None)
+    job = _new_job("upload", None, _hype_owner())
     path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ext)
     with open(path, "wb") as f:
         f.write(data)
@@ -706,6 +721,33 @@ def _done_job_source(job_id: str) -> tuple[dict, str]:
     return job, job["source_path"]
 
 
+def _require_clip_job(job: dict, player_id: int, clip_type: str) -> None:
+    """A save must land in the slot its import was started for.
+
+    The editor re-sends player_id/type at save time from page state derived from
+    the editor URL, and that used to be the ONLY thing deciding where the clip
+    went: a save saying `walkup` filed the audio under walk-up even when the
+    import had been started from the home-run slot. Nothing detected it, so the
+    only symptom was a home-run song sitting in a player's walk-up section.
+    Mismatches are a client bug — fail loudly (400) instead of mis-filing."""
+    owner = job.get("owner") or {}
+    if owner.get("kind") != "clip":
+        raise JobError("this import was not started for a player clip")
+    if owner.get("player_id") != player_id or owner.get("clip_type") != clip_type:
+        raise JobError(
+            f"this import was started for player {owner.get('player_id')}'s "
+            f"{owner.get('clip_type')} clip, not player {player_id}'s {clip_type} "
+            "clip — re-import from that slot's Add Clip button"
+        )
+
+
+def _require_hype_job(job: dict) -> None:
+    """Same binding for hype imports: a player-clip job can't be saved as a hype
+    clip (its audio was picked for a player's slot, not the crowd-stinger list)."""
+    if (job.get("owner") or {}).get("kind") != "hype":
+        raise JobError("this import was not started for a hype clip")
+
+
 def create_clip(
     job_id: str,
     player_id: int,
@@ -717,6 +759,7 @@ def create_clip(
     volume_boost_db: float,
 ) -> dict:
     job, src = _done_job_source(job_id)
+    _require_clip_job(job, player_id, clip_type)
     # Mark the source in-use before the very first read of it. Probe, validate,
     # and render all happen while no row references it yet, so a concurrent
     # eviction (of a stale job sharing this source) could otherwise unlink it
@@ -774,6 +817,7 @@ def create_hype(
     volume_boost_db: float,
 ) -> dict:
     job, src = _done_job_source(job_id)
+    _require_hype_job(job)
     title = title.strip()
     if not title or len(title) > 80:
         raise JobError("title must be 1–80 characters")
