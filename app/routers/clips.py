@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
 from .. import db
 from ..models import ClipCreate, ClipPatch, YoutubeImport
-from ..services import clipper
+from ..services import audio, clipper
 
 router = APIRouter(tags=["clips"])
 
@@ -66,7 +66,7 @@ def create_clip(body: ClipCreate):
     if db.get_player(body.player_id) is None:
         raise HTTPException(404, f"player {body.player_id} not found")
     try:
-        return clipper.create_clip(
+        clip = clipper.create_clip(
             job_id=body.job_id,
             player_id=body.player_id,
             clip_type=body.type,
@@ -80,6 +80,8 @@ def create_clip(body: ClipCreate):
         raise HTTPException(400, str(e)) from e
     except clipper.RenderError as e:
         raise HTTPException(500, str(e)) from e
+    audio.notify_data_changed("players")  # may change active_*_clip_id
+    return clip
 
 
 @router.get("/api/clips/{clip_id}/edit_context")
@@ -123,6 +125,7 @@ def activate_clip(clip_id: int):
     if db.get_clip(clip_id) is None:
         raise HTTPException(404, f"clip {clip_id} not found")
     db.activate_clip(clip_id)
+    audio.notify_data_changed("players")
     return db.get_clip(clip_id)
 
 
@@ -130,4 +133,5 @@ def activate_clip(clip_id: int):
 def delete_clip(clip_id: int):
     if not db.delete_clip(clip_id):
         raise HTTPException(404, f"clip {clip_id} not found")
+    audio.notify_data_changed("players")  # deletion can promote a new active clip
     return Response(status_code=204)

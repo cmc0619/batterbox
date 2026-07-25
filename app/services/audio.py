@@ -53,6 +53,13 @@ class WSManager:
 
 ws_manager = WSManager()
 
+
+def notify_data_changed(scope: str) -> None:
+    """Broadcast that kiosk-relevant data changed. No payload — clients
+    refetch what they display via REST. scope per docs/API.md:
+    "teams" | "players" | "hype"."""
+    ws_manager.broadcast({"event": "data_changed", "scope": scope})
+
 _lock = threading.RLock()  # guards _state / _mpv_proc / _mpv_ipc reads+writes
 # Serializes complete play/stop transitions. Without it, two overlapping play
 # requests can interleave stop/start and leave an untracked mpv process

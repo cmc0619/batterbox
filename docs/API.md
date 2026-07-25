@@ -17,11 +17,14 @@ Server → client JSON messages. Clients never send.
 { "event": "volume",  "volume": 65 }
 { "event": "warning", "message": "No audio output device found" }
 { "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "play_id": 13, "volume": 80 }
+{ "event": "data_changed", "scope": "teams" }
 ```
 
 `play_id` is a monotonic per-play token. Clients that report natural end-of-song echo it back (see `POST /api/playback/stop`) so a delayed `ended` from a previous clip can't stop the current one.
 
 `type` is `walkup`|`homerun`|`walkout` for player clips, or `hype` for hype clips — a hype play has `player_id: null` and `clip_id` = the hype clip id. The `state` message carries the same `type` semantics.
+
+`data_changed` fires after any REST mutation of kiosk-relevant data — scope `teams` (team created/renamed/deleted or active team changed), `players` (player create/update/delete/reorder/photo, and clip create/activate/delete — those change `active_*_clip_id`), `hype` (hype clip created/deleted). It carries no payload; clients refetch what they display via REST. The kiosk refreshes its grid on this event (debounced ~300ms) and after a WS reconnect (changes made while disconnected would otherwise be missed).
 
 Browser playback backend: on `play`, clients play `audio_url` via HTMLAudioElement at `volume` (0–100 → 0–1), applying `volume_boost_db` via WebAudio GainNode when nonzero. On `stop`, halt immediately (<200ms). On connect, server sends a `state` message.
 

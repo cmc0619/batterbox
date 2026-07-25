@@ -7,7 +7,7 @@ from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
 from .. import db
 from ..models import ClipPatch, HypeCreate, HypeYoutubeImport
-from ..services import clipper
+from ..services import audio, clipper
 
 router = APIRouter(tags=["hype"])
 
@@ -57,7 +57,7 @@ async def import_upload(title: str, file: UploadFile = File(...)):
 @router.post("/api/hype", status_code=201)
 def create_hype(body: HypeCreate):
     try:
-        return clipper.create_hype(
+        hype = clipper.create_hype(
             job_id=body.job_id,
             title=body.title,
             trim_start_sec=body.trim_start_sec,
@@ -70,6 +70,8 @@ def create_hype(body: HypeCreate):
         raise HTTPException(400, str(e)) from e
     except clipper.RenderError as e:
         raise HTTPException(500, str(e)) from e
+    audio.notify_data_changed("hype")
+    return hype
 
 
 @router.get("/api/hype/{hype_id}/edit_context")
@@ -112,4 +114,5 @@ def patch_hype(hype_id: int, body: ClipPatch):
 def delete_hype(hype_id: int):
     if not db.delete_hype(hype_id):
         raise HTTPException(404, f"hype clip {hype_id} not found")
+    audio.notify_data_changed("hype")
     return Response(status_code=204)
