@@ -155,7 +155,7 @@ Target: **Raspberry Pi 4 (any RAM), 64-bit Raspberry Pi OS Bookworm** — the on
 
 Default is `AUDIO_BACKEND=browser`: the kiosk Chromium on the Pi plays the sound. Zero Docker audio config needed.
 
-With the browser backend, only **player-role** clients make sound — the kiosk launcher opens `/?player=1`, and the kiosk top bar has a speaker toggle any device can use to opt itself in. Every page starts silent, so phones and forgotten admin tabs no longer echo the song over each other. Opting in is deliberately open rather than exclusive: a spectator can turn sound on for their own phone (handy with a Bluetooth earpiece) and nobody can mute or hijack anyone else's device. That also means "one speaker" is up to you, not enforced — if two devices near each other are both on, you'll hear both.
+With the browser backend, only **player-role** clients make sound — the kiosk launcher opens `/?player=1`, and the kiosk top bar has a speaker toggle any device can use to opt itself in. Every page starts silent, so phones and forgotten admin tabs no longer echo the song over each other. Opting in is deliberately open rather than exclusive: a spectator can turn sound on for their own phone (handy with a Bluetooth earpiece) and nobody can mute or hijack anyone else's device. That also means "one speaker" is up to you, not enforced — if two devices near each other are both on, you'll hear both. Turning sound on partway through a song joins that song where it already is, and turning it off silences only that device — the song keeps playing everywhere else.
 
 If you want the Pi headless (no browser, phones only), set `AUDIO_BACKEND=server` in `docker-compose.pi.yml` — mpv inside the container plays directly to ALSA via the mapped `/dev/snd`. You may need `AUDIO_OUTPUT` (e.g. `plughw:1,0` for a USB dongle) if auto picks the wrong device.
 
@@ -223,7 +223,7 @@ Designed for a **Hammond 1456KH3BKBU** sloped aluminum console (254 × 211 × 76
   ```
 
 - **Nothing downloads at the field** — expected. YouTube import needs internet. Import at home; the field run is fully offline.
-- **Tapping tiles is silent everywhere** — no device holds the audio player role. Tap the speaker toggle on the kiosk top bar (turns green), open the kiosk as `/?player=1`, or use `AUDIO_BACKEND=server`.
+- **Tapping tiles is silent everywhere** — no device holds the audio player role. Tap the speaker toggle on the kiosk top bar (turns green), open the kiosk as `/?player=1`, or use `AUDIO_BACKEND=server`. (The song still ends on time and the tile stops pulsing either way — the server tracks the clip's length itself.)
 - **Chromium shows a "restore pages?" bubble** — the kiosk script already passes `--disable-session-crashed-bubble` and `--incognito`; if you see it anyway you killed power mid-write. It's harmless; tap through once.
 - **Container logs** — `docker compose logs -f app`.
 
