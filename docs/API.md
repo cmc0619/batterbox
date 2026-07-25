@@ -49,6 +49,8 @@ Browser playback backend — client audio roles: every WS client mirrors playbac
   them in next-batter, but they stay in the roster (admin always lists them).
 - `POST /api/teams/{team_id}/players` `{ "name", "jersey_number" }` → player
 - `PATCH /api/players/{id}` `{ "name"?, "jersey_number"?, "absent"? }` → player
+
+  Name validation is deliberately permissive (mid-game roster entry is fog-of-war): empty, whitespace-only, and explicit-`null` names are all accepted on create and patch — a `null` name is stored and returned as `""` (a player can be just a jersey number; this used to 500). `jersey_number` must be ≥ 0 when present (**422** otherwise); `null` clears it.
 - `DELETE /api/players/{id}` → 204 (cascades clips + files)
 - `POST /api/teams/{team_id}/players/reorder` `{ "player_ids": [..] }` → 204 (sets sort_order by array position). `player_ids` must be the team's **complete** roster, each id exactly once — otherwise 400 and no order change (a partial list would silently corrupt the order of omitted players).
 - `POST /api/players/{id}/photo` multipart `file` (jpg/png, ≤5MB, content-checked by magic bytes — a renamed non-image 400s) → `{ "photo_url" }`

@@ -19,14 +19,18 @@ class ActiveTeamSet(BaseModel):
     team_id: int
 
 
+# Names are deliberately permissive (empty/whitespace/null accepted — mid-game
+# roster entry is fog-of-war; a player can be just a jersey number). A null
+# name is stored as "" (the column is NOT NULL — an unguarded null used to
+# 500). Jersey numbers only need to be non-negative.
 class PlayerCreate(BaseModel):
-    name: str
-    jersey_number: int | None = None
+    name: str | None = None
+    jersey_number: int | None = Field(default=None, ge=0)
 
 
 class PlayerUpdate(BaseModel):
     name: str | None = None
-    jersey_number: int | None = None
+    jersey_number: int | None = Field(default=None, ge=0)
     absent: bool | None = None
 
 
