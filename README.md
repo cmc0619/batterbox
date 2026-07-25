@@ -31,7 +31,7 @@ Requires Docker Desktop. That's all.
 docker compose up --build
 ```
 
-Open http://localhost:8080 — the grid loads seeded with two demo teams (Sandlot Sluggers and Dugout Demons). Audio plays through your PC's browser; GPIO is mocked.
+Open http://localhost:8080/?player=1 — the grid loads seeded with two demo teams (Sandlot Sluggers and Dugout Demons). Audio plays through your PC's browser (the `?player=1` marks this tab as the speaker; other tabs/phones are silent controllers); GPIO is mocked.
 
 Mock GPIO keyboard shortcuts (same code path as real GPIO):
 
@@ -155,6 +155,8 @@ Target: **Raspberry Pi 4 (any RAM), 64-bit Raspberry Pi OS Bookworm** — the on
 
 Default is `AUDIO_BACKEND=browser`: the kiosk Chromium on the Pi plays the sound. Zero Docker audio config needed.
 
+With the browser backend, only the **player-role** client makes sound — the kiosk launcher opens `/?player=1`, and the kiosk top bar has a speaker toggle to move the role to another device. Phones and admin tabs are silent controllers, so several open pages no longer echo the song over each other.
+
 If you want the Pi headless (no browser, phones only), set `AUDIO_BACKEND=server` in `docker-compose.pi.yml` — mpv inside the container plays directly to ALSA via the mapped `/dev/snd`. You may need `AUDIO_OUTPUT` (e.g. `plughw:1,0` for a USB dongle) if auto picks the wrong device.
 
 ### Bluetooth speaker
@@ -221,6 +223,7 @@ Designed for a **Hammond 1456KH3BKBU** sloped aluminum console (254 × 211 × 76
   ```
 
 - **Nothing downloads at the field** — expected. YouTube import needs internet. Import at home; the field run is fully offline.
+- **Tapping tiles is silent everywhere** — no device holds the audio player role. Tap the speaker toggle on the kiosk top bar (turns green), open the kiosk as `/?player=1`, or use `AUDIO_BACKEND=server`.
 - **Chromium shows a "restore pages?" bubble** — the kiosk script already passes `--disable-session-crashed-bubble` and `--incognito`; if you see it anyway you killed power mid-write. It's harmless; tap through once.
 - **Container logs** — `docker compose logs -f app`.
 
