@@ -90,6 +90,7 @@ _state = {
     "audio_url": None,
     "volume_boost_db": None,
     "duration_sec": None,
+    "server_eos": None,
     "_started_at": None,  # time.monotonic(); never leaves get_state()
 }
 
@@ -104,6 +105,7 @@ def _idle_fields() -> dict:
         audio_url=None,
         volume_boost_db=None,
         duration_sec=None,
+        server_eos=None,
         _started_at=None,
     )
 
@@ -339,6 +341,7 @@ def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
                 audio_url=row["audio_url"],
                 volume_boost_db=row["volume_boost_db"] or 0.0,
                 duration_sec=duration,
+                server_eos=server_eos,
                 _started_at=time.monotonic(),
             )
         ws_manager.broadcast(
