@@ -260,6 +260,17 @@ async function loadTeams({ keepPage = false } = {}) {
 document.getElementById('btn-stop').addEventListener('click', () => {
   BB.playback.stop().catch((err) => showBanner(err.message, false));
 });
+
+// Audio-role toggle: lit speaker = this device plays WS audio (player role).
+const soundBtn = document.getElementById('btn-sound');
+function renderSoundBtn(on) {
+  soundBtn.textContent = on ? '\u{1F50A}' : '\u{1F507}'; // speaker / muted speaker
+  soundBtn.classList.toggle('on', on);
+  soundBtn.setAttribute('aria-pressed', String(on));
+}
+soundBtn.addEventListener('click', () => BB.setAudioPlayer(!BB.isAudioPlayer()));
+BB.on('audiorole', (msg) => renderSoundBtn(msg.player));
+renderSoundBtn(BB.isAudioPlayer());
 pagePrev.addEventListener('click', () => { page = Math.max(0, page - 1); render(); });
 pageNext.addEventListener('click', () => {
   const len = mode === 'h' ? hypeClips.length : visiblePlayers().length;

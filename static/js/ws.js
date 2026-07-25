@@ -49,6 +49,36 @@ function emit(event, msg) {
   }
 }
 
+/* ---------------- audio role ----------------
+ * 'player' = this device renders the sound (the Pi kiosk); everything else
+ * is a 'controller' — sends commands, mirrors state, stays silent. Default
+ * is controller so a forgotten phone/admin tab can never join the PA.
+ * The kiosk launcher opens /?player=1; the kiosk top-bar speaker toggle
+ * overrides via localStorage (the Pi's incognito Chromium never persists
+ * it, so the URL param stays authoritative there).
+ */
+const AUDIO_ROLE_KEY = 'bb-audio-player';
+
+function detectAudioRole() {
+  let stored = null;
+  try { stored = localStorage.getItem(AUDIO_ROLE_KEY); } catch { /* blocked */ }
+  if (stored === '1') return true;
+  if (stored === '0') return false;
+  return new URLSearchParams(location.search).get('player') === '1';
+}
+
+let isPlayer = detectAudioRole();
+
+function setAudioPlayer(v) {
+  isPlayer = !!v;
+  try { localStorage.setItem(AUDIO_ROLE_KEY, isPlayer ? '1' : '0'); } catch { /* blocked */ }
+  if (!isPlayer) {
+    audio.pause();
+    try { audio.currentTime = 0; } catch { /* not loaded yet */ }
+  }
+  emit('audiorole', { player: isPlayer });
+}
+
 /* ---------------- audio playback ---------------- */
 
 const audio = new Audio();
@@ -78,6 +108,7 @@ function handlePlay(msg) {
   const vol = Math.max(0, Math.min(100, msg.volume ?? lastState.volume ?? 80));
   lastPlayId = msg.play_id ?? null;
   lastState = { status: 'playing', clip_id: msg.clip_id, player_id: msg.player_id, type: msg.type, volume: vol };
+  if (!isPlayer) return; // controllers mirror state but never play audio
   audio.volume = vol / 100;
   const boost = Number(msg.volume_boost_db) || 0;
   if (boost !== 0 || boostRouted) {
@@ -225,6 +256,8 @@ export const BB = {
   playback,
   initMockGPIO,
   getState: () => ({ ...lastState }),
+  isAudioPlayer: () => isPlayer,
+  setAudioPlayer,
   getVolume: () => lastState.volume ?? 80,
   getWarning: () => lastWarning,
 };
