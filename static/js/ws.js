@@ -53,18 +53,23 @@ function emit(event, msg) {
  * 'player' = this device renders the sound (the Pi kiosk); everything else
  * is a 'controller' — sends commands, mirrors state, stays silent. Default
  * is controller so a forgotten phone/admin tab can never join the PA.
- * The kiosk launcher opens /?player=1; the kiosk top-bar speaker toggle
- * overrides via localStorage (the Pi's incognito Chromium never persists
- * it, so the URL param stays authoritative there).
+ * Several devices MAY opt in at once (kiosk + a spectator on a Bluetooth
+ * earpiece); no client can claim or revoke another client's role.
+ *
+ * Precedence: an explicit ?player=0|1 wins on load — the kiosk launcher
+ * passes ?player=1 and must not be silenced by a toggle someone left off on
+ * that device. Without the param the stored toggle decides, so a phone
+ * remembers its own choice.
  */
 const AUDIO_ROLE_KEY = 'bb-audio-player';
 
 function detectAudioRole() {
+  const param = new URLSearchParams(location.search).get('player');
+  if (param === '1') return true;
+  if (param === '0') return false;
   let stored = null;
   try { stored = localStorage.getItem(AUDIO_ROLE_KEY); } catch { /* blocked */ }
-  if (stored === '1') return true;
-  if (stored === '0') return false;
-  return new URLSearchParams(location.search).get('player') === '1';
+  return stored === '1';
 }
 
 let isPlayer = detectAudioRole();
