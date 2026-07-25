@@ -2,8 +2,8 @@
 
 Big league music for big league moments. Raspberry Pi–hosted walk-up song player. Full spec context lives in git history and `PROGRESS.md`.
 
-> ## ⛔ CODE FREEZE (owner directive, 2026-07-23)
-> **No changes to application code — `app/**` (Python) or `static/**` (JS/HTML/CSS) — without the owner's explicit approval BEFORE the change. Ask first, every time, no exceptions.** Docker (Dockerfile, compose files, entrypoint script), docs, README, this file, PROGRESS.md, seed data, and other non-code repo files may be changed autonomously.
+> ## Change policy (owner directive, updated 2026-07-25 — supersedes the 2026-07-23 code freeze)
+> The freeze is lifted; the project is under active development. Application code (`app/**`, `static/**`) may be changed as part of an agreed task. Still required every time: keep `docs/API.md` in the **same commit** as any API/WS change; verify against a running server before committing (there is no test suite — see Commands); one logical change per commit. Propose the approach and get the owner's OK **before** starting anything large or hard to reverse — schema migrations, contract changes, new runtime dependencies, or UX rework.
 
 ## Commands
 
@@ -22,7 +22,7 @@ Big league music for big league moments. Raspberry Pi–hosted walk-up song play
 
 ## Conventions
 
-- Playback state lives ONLY on the server; clients receive it via WebSocket (`/ws`). Default playback backend is `browser` (HTMLAudioElement) because Docker on PC can't reach host speakers; `AUDIO_BACKEND=server` uses mpv inside the container (Pi option). Audio roles: only the client opened with `?player=1` (the Pi kiosk launcher does this) or with the kiosk speaker toggle ON plays WS `play` audio; every other page is a silent controller. The kiosk grid also live-refreshes on the WS `data_changed` event.
+- Playback state lives ONLY on the server; clients receive it via WebSocket (`/ws`). Default playback backend is `browser` (HTMLAudioElement) because Docker on PC can't reach host speakers; `AUDIO_BACKEND=server` uses mpv inside the container (Pi option). Audio roles: only the client opened with `?player=1` (the Pi kiosk launcher does this) or with the kiosk speaker toggle ON plays WS `play` audio; every other page is a silent controller. Roles are **opt-in, multi-listener by design** — several devices may play at once (kiosk + a spectator's phone on a Bluetooth earpiece), no client can hijack or revoke another's role, and "one speaker" is an operator convention, not an enforced invariant. The kiosk grid also live-refreshes on the WS `data_changed` event.
 - GPIO handlers and mock keyboard shortcuts call the same playback REST endpoints — one code path.
 - UI rules: exactly 1024×600 kiosk layout, min ~18px text, huge touch targets, no hover-dependent interaction. Kiosk top bar has an O/D/H mode switch: O = offense (tap = walk-up clip, long-press 600ms = home-run clip), D = defense (players with an active walkout clip; tap = walkout, long-press = homerun), H = hype (crowd-stinger tiles, tap only). Volume is NOT on the top bar — it lives on the mock-GPIO bar (dev), physical GPIO buttons (Pi), and admin settings.
 - Commit + push autonomously after each verified slice. Keep this file and PROGRESS.md current in the same commits.

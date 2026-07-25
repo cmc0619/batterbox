@@ -155,7 +155,7 @@ Target: **Raspberry Pi 4 (any RAM), 64-bit Raspberry Pi OS Bookworm** — the on
 
 Default is `AUDIO_BACKEND=browser`: the kiosk Chromium on the Pi plays the sound. Zero Docker audio config needed.
 
-With the browser backend, only the **player-role** client makes sound — the kiosk launcher opens `/?player=1`, and the kiosk top bar has a speaker toggle to move the role to another device. Phones and admin tabs are silent controllers, so several open pages no longer echo the song over each other.
+With the browser backend, only **player-role** clients make sound — the kiosk launcher opens `/?player=1`, and the kiosk top bar has a speaker toggle any device can use to opt itself in. Every page starts silent, so phones and forgotten admin tabs no longer echo the song over each other. Opting in is deliberately open rather than exclusive: a spectator can turn sound on for their own phone (handy with a Bluetooth earpiece) and nobody can mute or hijack anyone else's device. That also means "one speaker" is up to you, not enforced — if two devices near each other are both on, you'll hear both.
 
 If you want the Pi headless (no browser, phones only), set `AUDIO_BACKEND=server` in `docker-compose.pi.yml` — mpv inside the container plays directly to ALSA via the mapped `/dev/snd`. You may need `AUDIO_OUTPUT` (e.g. `plughw:1,0` for a USB dongle) if auto picks the wrong device.
 
