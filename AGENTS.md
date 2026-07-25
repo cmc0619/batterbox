@@ -36,6 +36,31 @@ Big league music for big league moments. Raspberry Pi–hosted walk-up song play
 - Bluetooth (`/api/bluetooth/*`) and Wi-Fi hotspot (`/api/wifi/*`) intentionally report `available=false` off-Pi — that is expected, not a failure.
 - `.venv/bin/uvicorn --reload` hot-reloads on code edits; the DB/seed persists in `./data` across restarts.
 
+## Accepted by design — don't re-litigate these
+
+Automated reviewers keep filing these as defects. They are deliberate choices for
+a private-LAN appliance (one Pi 4, one field, no internet). If a review raises
+one, answer with this section instead of "fixing" it.
+
+- **No authentication or authorization anywhere**, and permissive CORS
+  (`allow_origins=["*"]`). Anyone who can reach the app is standing at the field.
+- **Wi-Fi hotspot password stored and returned in plain text** — the admin page
+  prefills it so the coach can read it aloud.
+- **Multiple simultaneous audio "player" clients.** Roles are opt-in and
+  client-side; the kiosk plus a spectator on a Bluetooth earpiece may both play
+  the same clip, and no client can claim or revoke another's role. "One speaker"
+  is an operator convention, not an invariant.
+- **Permissive player/team names** — empty, whitespace-only and explicit-`null`
+  accepted (null stored as `""`); mid-game roster entry is fog-of-war and a
+  player may be just a jersey number. `jersey_number` must be ≥ 0. Only a 500 on
+  any of these is a bug.
+- **One shared SQLite connection behind a lock, no ORM, no migration framework.**
+  Single-process and low-concurrency by design; upgrades are hand-written
+  non-destructive steps in `db._migrate`.
+- **Raspberry Pi 4 is the only target platform.**
+- **No test suite** — verify against a running server and put the evidence in the
+  PR body. Don't add pytest without asking.
+
 ## Lessons learned
 
 _(append dated entries whenever something bites)_
