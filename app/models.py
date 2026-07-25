@@ -130,4 +130,5 @@ class SettingsPatch(BaseModel):
     default_snippet_length: int | None = Field(default=None, ge=3, le=300)
     master_volume: int | None = Field(default=None, ge=0, le=100)
     audio_output: str | None = None
-    mock_gpio: bool | None = None
+    # mock_gpio is deliberately NOT patchable: GPIO mode is fixed at boot by
+    # the MOCK_GPIO env var, so a stored override could only misreport it.

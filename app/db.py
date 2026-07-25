@@ -92,7 +92,6 @@ def init_db() -> None:
             "default_snippet_length": "30",
             "master_volume": "80",
             "audio_output": config.AUDIO_OUTPUT,
-            "mock_gpio": "true" if config.MOCK_GPIO else "false",
             # Wi-Fi hotspot credentials (plain text by design — private-LAN
             # appliance, no auth; admin UI reads the password back aloud)
             "wifi_ssid": "BatterBox",
@@ -107,6 +106,32 @@ def init_db() -> None:
             conn.execute(
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (key, value)
             )
+        # AUDIO_OUTPUT env: INSERT OR IGNORE seeding meant a compose change
+        # (e.g. plughw:1,0 for a USB dongle, as the README recommends) was
+        # silently ignored on every boot after the first. Compose always sets
+        # the variable (with a default), so "env present" can't be the trigger
+        # — instead apply the env value whenever it CHANGED since the last
+        # boot (tracked via a sentinel row). An unchanged env never clobbers
+        # a value set via PATCH /api/settings in between.
+        last_env = conn.execute(
+            "SELECT value FROM settings WHERE key = 'audio_output_env'"
+        ).fetchone()
+        if last_env is None or last_env["value"] != config.AUDIO_OUTPUT:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value)"
+                " VALUES ('audio_output', ?)",
+                (config.AUDIO_OUTPUT,),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value)"
+                " VALUES ('audio_output_env', ?)",
+                (config.AUDIO_OUTPUT,),
+            )
+            if last_env is not None:
+                log.info(
+                    "AUDIO_OUTPUT changed since last boot -> audio_output = %s",
+                    config.AUDIO_OUTPUT,
+                )
         conn.commit()
         _seed_if_empty(conn)
 
@@ -274,7 +299,10 @@ def public_settings() -> dict:
         "default_snippet_length": int(get_setting("default_snippet_length", "30")),
         "master_volume": int(get_setting("master_volume", "80")),
         "audio_output": get_setting("audio_output", "auto"),
-        "mock_gpio": get_setting("mock_gpio", "true") == "true",
+        # Live env value, not a stored copy: GPIO mode is decided once at boot
+        # from MOCK_GPIO (gpio.init_gpio), and a stale DB mirror made the API
+        # report a mode the hardware wasn't actually in.
+        "mock_gpio": config.MOCK_GPIO,
     }
 
 

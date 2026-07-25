@@ -164,6 +164,8 @@ Status object:
 - `GET /api/settings` → `{ "default_snippet_length": 30, "master_volume": 80, "audio_output": "auto", "mock_gpio": true }`
 - `PATCH /api/settings` partial of the above → settings. Bounds: `default_snippet_length` 3–300 (seconds), `master_volume` 0–100; an out-of-range integer → **422**. An explicit `null` for a numeric field is silently ignored (200, the setting keeps its current value) — it is never stored, because a null would serialise as the string `"None"` and break later reads.
 
+  Environment interplay: `mock_gpio` is **read-only** — it reports the live `MOCK_GPIO` env value the GPIO layer actually booted with (a `mock_gpio` key in a PATCH is ignored). `audio_output` is patchable and persists, but a **changed** `AUDIO_OUTPUT` env value takes effect at the next boot and overwrites the stored setting (tracked via a sentinel, so an *unchanged* env never clobbers an admin-set value — previously the env was only honored on the very first boot).
+
 ## GPIO / mock buttons
 
 GPIO handlers (real or mock) call the playback endpoints above — no separate code path. Mock mode keyboard map (implemented in frontend, calls REST): `Space` = stop, `ArrowUp/ArrowDown` = volume ±5, `N` = next batter. On-screen debug buttons visible when `mock_gpio` is true. Hype clips are played from the kiosk's on-screen H mode only — there is deliberately **no** mock-GPIO keyboard `H` shortcut.
