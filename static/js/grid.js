@@ -218,10 +218,12 @@ function markPlaying(state) {
 
 /* ---------------- data loading ---------------- */
 
-async function loadPlayers(teamId) {
+let currentTeamId = null;
+
+async function loadPlayers(teamId, { keepPage = false } = {}) {
   // absent players stay in the roster (admin) but never appear on the kiosk
   players = (await BB.api(`/api/teams/${teamId}/players`)).filter((p) => !p.absent);
-  page = 0;
+  if (!keepPage) page = 0; // render() clamps a kept page if the list shrank
   render();
 }
 
@@ -230,7 +232,7 @@ async function loadHype() {
   render();
 }
 
-async function loadTeams() {
+async function loadTeams({ keepPage = false } = {}) {
   const [teams, active] = await Promise.all([
     BB.api('/api/teams'),
     BB.api('/api/teams/active'),
@@ -239,14 +241,18 @@ async function loadTeams() {
     ? active.team_id
     : (teams[0] && teams[0].id);
   if (selected == null) {
+    currentTeamId = null;
     players = [];
     render();
     showBanner('No teams yet — open ADMIN to create one.');
     return;
   }
+  const teamChanged = selected !== currentTeamId;
+  currentTeamId = selected;
   const team = teams.find((t) => t.id === selected);
   teamNameEl.textContent = team ? team.name : 'BatterBox';
-  await loadPlayers(selected);
+  // A different team is a fresh grid — always back to page 1.
+  await loadPlayers(selected, { keepPage: keepPage && !teamChanged });
 }
 
 /* ---------------- controls ---------------- */
@@ -298,6 +304,39 @@ BB.on('state', (msg) => {
   if (msg.audio_warning) showBanner(msg.audio_warning);
 });
 BB.on('warning', (msg) => showBanner(msg.message));
+
+// Remote admin edits (phone) must reach an open kiosk without a reload.
+// Debounce: a drag-reorder or multi-field save fires several mutations
+// back-to-back; one refetch after the burst is enough.
+let refreshTimer = null;
+function scheduleRosterRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    loadTeams({ keepPage: true })
+      .catch((err) => showBanner(`Refresh failed: ${err.message}`, false));
+  }, 300);
+}
+
+BB.on('data_changed', (msg) => {
+  if (msg.scope === 'hype') {
+    // Entering H mode refetches anyway (setMode); refresh live only when
+    // hype tiles are currently on screen.
+    if (mode === 'h') {
+      loadHype().catch((err) => showBanner(`Refresh failed: ${err.message}`, false));
+    }
+    return;
+  }
+  scheduleRosterRefresh(); // 'teams' and 'players' both re-render the roster
+});
+
+// Changes made while the socket was down never produced an event — refetch
+// on every reconnect. The first open is boot; the boot IIFE already loads.
+let firstOpen = true;
+BB.on('open', () => {
+  if (firstOpen) { firstOpen = false; return; }
+  scheduleRosterRefresh();
+});
 
 /* ---------------- boot ---------------- */
 
