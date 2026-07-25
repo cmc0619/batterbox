@@ -11,16 +11,18 @@ This is the **binding contract** between backend and frontend. Both sides MUST i
 Server → client JSON messages. Clients never send.
 
 ```json
-{ "event": "play",    "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 12, "audio_url": "/media/clips/3.mp3", "volume": 80, "volume_boost_db": 0.0 }
-{ "event": "play",    "clip_id": 2, "player_id": null, "type": "hype", "play_id": 13, "audio_url": "/media/hype/2.mp3", "volume": 80, "volume_boost_db": 0.0 }
+{ "event": "play",    "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 12, "audio_url": "/media/clips/3.mp3", "volume": 80, "volume_boost_db": 0.0, "server_eos": true }
+{ "event": "play",    "clip_id": 2, "player_id": null, "type": "hype", "play_id": 13, "audio_url": "/media/hype/2.mp3", "volume": 80, "volume_boost_db": 0.0, "server_eos": true }
 { "event": "stop" }
 { "event": "volume",  "volume": 65 }
 { "event": "warning", "message": "No audio output device found" }
-{ "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "play_id": 13, "volume": 80 }
+{ "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "play_id": 13, "volume": 80, "audio_url": null, "volume_boost_db": null, "duration_sec": null, "elapsed_sec": null }
 { "event": "data_changed", "scope": "teams" }
 ```
 
 `play_id` is a monotonic per-play token. Clients that report natural end-of-song echo it back (see `POST /api/playback/stop`) so a delayed `ended` from a previous clip can't stop the current one.
+
+**End of song belongs to the server.** `server_eos: true` means the server will end the play itself when the clip's own duration elapses (plus ~1s of grace for client start latency), and clients **must not** report `ended` — with several devices opted in to play, the first one to finish would otherwise stop the clip for all the others, and with no player-role client connected nothing would report at all. `server_eos: false` (a legacy row with no stored `duration_sec`) means there is no server-side end detection for that play, so a player-role client still reports `ended`. The `AUDIO_BACKEND=server` (mpv) path always reports `server_eos: false` and ends the play from mpv's own EOF instead.
 
 `type` is `walkup`|`homerun`|`walkout` for player clips, or `hype` for hype clips — a hype play has `player_id: null` and `clip_id` = the hype clip id. The `state` message carries the same `type` semantics.
 
@@ -28,7 +30,7 @@ Server → client JSON messages. Clients never send.
 
 Browser playback backend — client audio roles: every WS client mirrors playback state, but only a client holding the **player** role plays `audio_url` via HTMLAudioElement at `volume` (0–100 → 0–1, `volume_boost_db` via WebAudio GainNode when nonzero) and reports natural end-of-song (`POST /api/playback/stop` echoing `play_id`). Every other client is a **controller**: it sends commands and renders state but never produces sound and never reports `ended`. On `stop`, a player halts immediately (<200ms). On connect, the server sends a `state` message.
 
-The role is **opt-in and purely client-side**: a page is a silent controller unless it is opened with `?player=1` (the kiosk launcher passes it) or its top-bar speaker toggle is on (persisted in localStorage). An explicit `?player=0`|`1` wins at page load — the launcher's instruction can't be silenced by a toggle left off on that device — and the stored toggle decides only when the param is absent. **Multiple simultaneous players are allowed by design** — the Pi kiosk plus, say, a spectator listening on a phone with a Bluetooth earpiece can both play the same clip. The server enforces no exclusivity, and no client can claim or revoke another client's role: "at most one player" is an operator convention, not an invariant. Consequences to know: (a) every player reports natural end-of-song, so the first to finish clears the shared playing state for the others; (b) turning the role on mid-song does not start the clip already in progress — it takes effect on the next play; (c) if no player is connected under `AUDIO_BACKEND=browser`, plays are silent and the playing state clears only via STOP (`AUDIO_BACKEND=server`/mpv has no such dependency).
+The role is **opt-in and purely client-side**: a page is a silent controller unless it is opened with `?player=1` (the kiosk launcher passes it) or its top-bar speaker toggle is on (persisted in localStorage). An explicit `?player=0`|`1` wins at page load — the launcher's instruction can't be silenced by a toggle left off on that device — and the stored toggle decides only when the param is absent. **Multiple simultaneous players are allowed by design** — the Pi kiosk plus, say, a spectator listening on a phone with a Bluetooth earpiece can both play the same clip. The server enforces no exclusivity, and no client can claim or revoke another client's role: "at most one player" is an operator convention, not an invariant. One consequence to know: turning the role on mid-song does not start the clip already in progress — it takes effect on the next play. Ending a play is *not* a client concern (see `server_eos` above), so extra listeners cannot cut each other's audio short, and a play with no listener at all still ends on time.
 
 ## Teams
 
@@ -125,10 +127,10 @@ Hype clip object:
 - `POST /api/playback/play` `{ "player_id", "type" }` → state (plays active clip of that type — `walkup`|`homerun`|`walkout`; 404 if none; stops current first)
 - `POST /api/playback/play_clip` `{ "clip_id" }` → state
 - `POST /api/playback/play_hype` `{ "hype_id" }` → state (404 if the hype clip doesn't exist; stops current first, then broadcasts WS `play` with `type: "hype"`, `player_id: null`, `clip_id` = hype id, `audio_url`, `volume`, `volume_boost_db`). `GET /api/playback/state` and the WS `state` message report `type: "hype"` while a hype clip is playing.
-- `POST /api/playback/stop` (body optional: `{ "play_id"? }`) → state (halt ≤200ms). Without a body (STOP button, GPIO): always stops. With `play_id` (the browser `ended` reporter): stops only if that play is still the current one — otherwise a no-op returning current state.
+- `POST /api/playback/stop` (body optional: `{ "play_id"? }`) → state (halt ≤200ms). Without a body (STOP button, GPIO): always stops. With `play_id` (the browser `ended` reporter, used only when `server_eos` was false): stops only if that play is still the current one — otherwise a no-op returning current state.
 - `POST /api/playback/volume` `{ "volume": 0-100 }` → state (persisted to settings)
 - `POST /api/playback/next` → state (next player in active team's batting order — wraps around — with an active walkup clip; plays it)
-- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "play_id", "volume", "audio_warning": null|"..." }` (`type` is a clip type or `"hype"`)
+- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "play_id", "volume", "audio_warning": null|"...", "audio_url", "volume_boost_db", "duration_sec", "elapsed_sec" }` (`type` is a clip type or `"hype"`). The last four are null while idle; while playing they describe the clip well enough for a client to **join it in progress** — `elapsed_sec` is how far in the play is, measured server-side from the play broadcast.
 
 ## Bluetooth speaker pairing
 

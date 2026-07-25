@@ -89,11 +89,17 @@ function setAudioPlayer(v) {
 const audio = new Audio();
 audio.preload = 'auto';
 let lastPlayId = null;
-// Song finished naturally → tell the server (same path as the STOP button)
-// so every client clears the playing state: tile highlight + Walter.
-// The play_id makes it conditional server-side: a slow client's ended from
-// the PREVIOUS clip can no longer stop the one playing now.
-audio.addEventListener('ended', () => { playback.stop(lastPlayId).catch(() => {}); });
+let lastServerEos = false;
+// End of song is the SERVER's call whenever it knows the clip length
+// (server_eos on the play event): several devices may be opted in to play,
+// and reporting from here let whichever one finished first cut the song for
+// all the others. Only for a clip with no stored duration does the client
+// still report — play_id keeps that conditional server-side, so a late
+// report from the PREVIOUS clip can't stop the one playing now.
+audio.addEventListener('ended', () => {
+  if (lastServerEos) return;
+  playback.stop(lastPlayId).catch(() => {});
+});
 let actx = null;
 let gainNode = null;
 let boostRouted = false;
@@ -112,6 +118,7 @@ function ensureBoostGraph() {
 function handlePlay(msg) {
   const vol = Math.max(0, Math.min(100, msg.volume ?? lastState.volume ?? 80));
   lastPlayId = msg.play_id ?? null;
+  lastServerEos = msg.server_eos === true;
   lastState = { status: 'playing', clip_id: msg.clip_id, player_id: msg.player_id, type: msg.type, volume: vol };
   if (!isPlayer) return; // controllers mirror state but never play audio
   audio.volume = vol / 100;
