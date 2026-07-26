@@ -56,17 +56,27 @@ function emit(event, msg) {
  * Several devices MAY opt in at once (kiosk + a spectator on a Bluetooth
  * earpiece); no client can claim or revoke another client's role.
  *
- * Precedence: an explicit ?player=0|1 wins on load — the kiosk launcher
- * passes ?player=1 and must not be silenced by a toggle someone left off on
- * that device. Without the param the stored toggle decides, so a phone
- * remembers its own choice.
+ * The role belongs to the DEVICE, not to one page: an explicit ?player=0|1
+ * wins on load and is remembered, so the kiosk launcher's ?player=1 can't be
+ * silenced by a toggle left off — and it survives the walk from the kiosk to
+ * ADMIN and back (only index.html carries the toggle, so without this the
+ * Pi's own admin page would be a silent controller and testing a clip from
+ * the touchscreen would play nothing). Without the param the stored value
+ * decides, so a phone keeps its own choice.
  */
 const AUDIO_ROLE_KEY = 'bb-audio-player';
 
+function storeAudioRole(on) {
+  try { localStorage.setItem(AUDIO_ROLE_KEY, on ? '1' : '0'); } catch { /* blocked */ }
+}
+
 function detectAudioRole() {
   const param = new URLSearchParams(location.search).get('player');
-  if (param === '1') return true;
-  if (param === '0') return false;
+  if (param === '1' || param === '0') {
+    const on = param === '1';
+    storeAudioRole(on); // the whole device follows this page's instruction
+    return on;
+  }
   let stored = null;
   try { stored = localStorage.getItem(AUDIO_ROLE_KEY); } catch { /* blocked */ }
   return stored === '1';
@@ -77,7 +87,7 @@ let isPlayer = detectAudioRole();
 function setAudioPlayer(v) {
   const was = isPlayer;
   isPlayer = !!v;
-  try { localStorage.setItem(AUDIO_ROLE_KEY, isPlayer ? '1' : '0'); } catch { /* blocked */ }
+  storeAudioRole(isPlayer);
   if (!isPlayer) {
     audio.pause();
     try { audio.currentTime = 0; } catch { /* not loaded yet */ }
