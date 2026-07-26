@@ -116,22 +116,48 @@ def init_db() -> None:
         last_env = conn.execute(
             "SELECT value FROM settings WHERE key = 'audio_output_env'"
         ).fetchone()
-        if last_env is None or last_env["value"] != config.AUDIO_OUTPUT:
-            conn.execute(
-                "INSERT OR REPLACE INTO settings (key, value)"
-                " VALUES ('audio_output', ?)",
-                (config.AUDIO_OUTPUT,),
-            )
+
+        def _record_env() -> None:
             conn.execute(
                 "INSERT OR REPLACE INTO settings (key, value)"
                 " VALUES ('audio_output_env', ?)",
                 (config.AUDIO_OUTPUT,),
             )
-            if last_env is not None:
+
+        def _apply_env() -> None:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value)"
+                " VALUES ('audio_output', ?)",
+                (config.AUDIO_OUTPUT,),
+            )
+            _record_env()
+
+        if last_env is None:
+            # First boot after this tracking was added. A pre-existing DB
+            # already holds a value and nothing distinguishes an admin's
+            # choice from a stale first-boot env seed, so only replace it
+            # while it is still the literal default — the same "upgrade
+            # untouched defaults only" rule the snippet-length migration
+            # below uses. That fixes the stuck-at-"auto" case the sentinel
+            # exists for without discarding a deliberately chosen device.
+            current = conn.execute(
+                "SELECT value FROM settings WHERE key = 'audio_output'"
+            ).fetchone()
+            untouched = current is None or current["value"] == "auto"
+            if untouched and config.AUDIO_OUTPUT != "auto":
+                _apply_env()
                 log.info(
-                    "AUDIO_OUTPUT changed since last boot -> audio_output = %s",
+                    "audio_output was the default -> AUDIO_OUTPUT env = %s",
                     config.AUDIO_OUTPUT,
                 )
+            else:
+                _record_env()  # adopt the env as the baseline, change nothing
+        elif last_env["value"] != config.AUDIO_OUTPUT:
+            _apply_env()
+            log.info(
+                "AUDIO_OUTPUT changed since last boot -> audio_output = %s",
+                config.AUDIO_OUTPUT,
+            )
         conn.commit()
         _seed_if_empty(conn)
 
