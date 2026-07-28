@@ -14,6 +14,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 
 from .. import config, db
 
@@ -53,6 +54,13 @@ class WSManager:
 
 ws_manager = WSManager()
 
+
+def notify_data_changed(scope: str) -> None:
+    """Broadcast that kiosk-relevant data changed. No payload — clients
+    refetch what they display via REST. scope per docs/API.md:
+    "teams" | "players" | "hype"."""
+    ws_manager.broadcast({"event": "data_changed", "scope": scope})
+
 _lock = threading.RLock()  # guards _state / _mpv_proc / _mpv_ipc reads+writes
 # Serializes complete play/stop transitions. Without it, two overlapping play
 # requests can interleave stop/start and leave an untracked mpv process
@@ -60,6 +68,12 @@ _lock = threading.RLock()  # guards _state / _mpv_proc / _mpv_ipc reads+writes
 _op_lock = threading.Lock()
 _mpv_proc: subprocess.Popen | None = None
 _mpv_ipc: str | None = None
+_eos_timer: threading.Timer | None = None
+
+# Browser clients start a beat after the broadcast (request latency, decode);
+# ending the play exactly at duration would clip the last fraction of a second
+# on the device that hears it.
+EOS_GRACE_SEC = 1.0
 
 _state = {
     "status": "idle",  # idle | playing
@@ -71,12 +85,41 @@ _state = {
     # (slow phone, delayed request) can't kill the one playing now.
     "play_id": 0,
     "audio_warning": None,
+    # Enough to JOIN a play already in progress: a client that becomes a
+    # player mid-song (or reloads) needs the file and how far in we are.
+    "audio_url": None,
+    "volume_boost_db": None,
+    "duration_sec": None,
+    "server_eos": None,
+    "_started_at": None,  # time.monotonic(); never leaves get_state()
 }
+
+
+def _idle_fields() -> dict:
+    """State fields that describe "nothing is playing"."""
+    return dict(
+        status="idle",
+        clip_id=None,
+        player_id=None,
+        type=None,
+        audio_url=None,
+        volume_boost_db=None,
+        duration_sec=None,
+        server_eos=None,
+        _started_at=None,
+    )
 
 
 def get_state() -> dict:
     with _lock:
         state = dict(_state)
+    started = state.pop("_started_at", None)
+    # elapsed_sec lets a client that just opted in start at the right offset
+    # instead of waiting out the current clip in silence.
+    if state["status"] == "playing" and started is not None:
+        state["elapsed_sec"] = round(max(0.0, time.monotonic() - started), 3)
+    else:
+        state["elapsed_sec"] = None
     state["volume"] = int(db.get_setting("master_volume", "80"))
     return state
 
@@ -177,8 +220,55 @@ def _watch_mpv(proc: subprocess.Popen) -> None:
             return  # replaced or stopped while we waited; not ours to clear
         _mpv_proc = None
         _mpv_ipc = None
-        _state.update(status="idle", clip_id=None, player_id=None, type=None)
+        _state.update(_idle_fields())
         ws_manager.broadcast({"event": "stop"})
+
+
+# --------------------------------------------------- end-of-song ownership
+
+
+def _eos_fire(play_id: int) -> None:
+    """The clip's own length has elapsed: clear playback state server-side.
+
+    End of song used to be reported by whichever browser was playing. With
+    audio roles that breaks twice over: several devices may be opted in, so
+    the FIRST one to finish (or to background itself, or to hit a slow
+    network) stopped the clip for everyone else including the PA — and with
+    no player-role client connected at all, nothing ever reported, so the
+    state stuck at "playing" until someone pressed STOP. The server knows
+    the clip's duration, so it owns the end of the play.
+    """
+    with _op_lock:
+        with _lock:
+            stale = _state["status"] != "playing" or _state["play_id"] != play_id
+        if stale:
+            return  # superseded by another play or already stopped
+        _halt()
+
+
+def _arm_eos_timer(play_id: int, duration_sec: float) -> None:
+    """Callers hold _op_lock (so this can't race the next play's _halt)."""
+    global _eos_timer
+    timer = threading.Timer(
+        duration_sec + EOS_GRACE_SEC, _eos_fire, args=(play_id,)
+    )
+    timer.daemon = True
+    timer.name = "eos-timer"
+    with _lock:
+        _eos_timer = timer
+    timer.start()
+
+
+def _clip_duration(row: dict) -> float | None:
+    """Positive duration of a clip/hype row, or None when unusable (legacy
+    rows can carry NULL — those fall back to client end-of-song reports)."""
+    try:
+        duration = float(row.get("duration_sec"))
+    except (TypeError, ValueError):
+        return None
+    if duration != duration or duration <= 0:  # NaN or nonpositive
+        return None
+    return duration
 
 
 # ------------------------------------------------------------ operations
@@ -186,12 +276,16 @@ def _watch_mpv(proc: subprocess.Popen) -> None:
 
 def _halt() -> None:
     """Tear down current playback and broadcast stop. Callers hold _op_lock."""
-    global _mpv_proc, _mpv_ipc
+    global _mpv_proc, _mpv_ipc, _eos_timer
     with _lock:
         proc = _mpv_proc
         _mpv_proc = None
         _mpv_ipc = None
-        _state.update(status="idle", clip_id=None, player_id=None, type=None)
+        timer = _eos_timer
+        _eos_timer = None
+        _state.update(_idle_fields())
+    if timer is not None:
+        timer.cancel()  # no-op if it already fired
     if proc is not None:
         try:
             proc.terminate()
@@ -231,6 +325,10 @@ def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
                 # broadcast) instead of reporting a playback that isn't
                 # happening — a stuck "playing" state never clears itself.
                 return get_state()
+        duration = _clip_duration(row)
+        # mpv reports its own EOF (_watch_mpv); the timer is for the browser
+        # backend, where no single client may be trusted to end the play.
+        server_eos = duration is not None and proc is None
         with _lock:
             play_id = _state["play_id"] + 1
             _state.update(
@@ -240,6 +338,11 @@ def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
                 type=ctype,
                 play_id=play_id,
                 audio_warning=None,
+                audio_url=row["audio_url"],
+                volume_boost_db=row["volume_boost_db"] or 0.0,
+                duration_sec=duration,
+                server_eos=server_eos,
+                _started_at=time.monotonic(),
             )
         ws_manager.broadcast(
             {
@@ -251,12 +354,18 @@ def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
                 "audio_url": row["audio_url"],
                 "volume": int(db.get_setting("master_volume", "80")),
                 "volume_boost_db": row["volume_boost_db"] or 0.0,
+                # False = no server-side end detection for this play, so a
+                # player-role client must still report `ended` (legacy rows
+                # with no duration).
+                "server_eos": server_eos,
             }
         )
         if proc is not None:
             threading.Thread(
                 target=_watch_mpv, args=(proc,), daemon=True, name="mpv-watcher"
             ).start()
+        elif server_eos:
+            _arm_eos_timer(play_id, duration)
     return get_state()
 
 

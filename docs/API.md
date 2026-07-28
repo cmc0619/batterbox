@@ -11,19 +11,27 @@ This is the **binding contract** between backend and frontend. Both sides MUST i
 Server → client JSON messages. Clients never send.
 
 ```json
-{ "event": "play",    "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 12, "audio_url": "/media/clips/3.mp3", "volume": 80, "volume_boost_db": 0.0 }
-{ "event": "play",    "clip_id": 2, "player_id": null, "type": "hype", "play_id": 13, "audio_url": "/media/hype/2.mp3", "volume": 80, "volume_boost_db": 0.0 }
+{ "event": "play",    "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 12, "audio_url": "/media/clips/3.mp3", "volume": 80, "volume_boost_db": 0.0, "server_eos": true }
+{ "event": "play",    "clip_id": 2, "player_id": null, "type": "hype", "play_id": 13, "audio_url": "/media/hype/2.mp3", "volume": 80, "volume_boost_db": 0.0, "server_eos": true }
 { "event": "stop" }
 { "event": "volume",  "volume": 65 }
 { "event": "warning", "message": "No audio output device found" }
-{ "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "play_id": 13, "volume": 80 }
+{ "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "play_id": 13, "volume": 80, "audio_url": null, "volume_boost_db": null, "duration_sec": null, "elapsed_sec": null, "server_eos": null }
+{ "event": "state",   "status": "playing", "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 14, "volume": 80, "audio_url": "/media/clips/3.mp3", "volume_boost_db": 0.0, "duration_sec": 12.0, "elapsed_sec": 4.13, "server_eos": true }
+{ "event": "data_changed", "scope": "teams" }
 ```
 
 `play_id` is a monotonic per-play token. Clients that report natural end-of-song echo it back (see `POST /api/playback/stop`) so a delayed `ended` from a previous clip can't stop the current one.
 
+**End of song belongs to the server.** `server_eos: true` means the server will end the play itself when the clip's own duration elapses (plus ~1s of grace for client start latency), and clients **must not** report `ended` — with several devices opted in to play, the first one to finish would otherwise stop the clip for all the others, and with no player-role client connected nothing would report at all. `server_eos: false` (a legacy row with no stored `duration_sec`) means there is no server-side end detection for that play, so a player-role client still reports `ended`. The `AUDIO_BACKEND=server` (mpv) path always reports `server_eos: false` and ends the play from mpv's own EOF instead.
+
 `type` is `walkup`|`homerun`|`walkout` for player clips, or `hype` for hype clips — a hype play has `player_id: null` and `clip_id` = the hype clip id. The `state` message carries the same `type` semantics.
 
-Browser playback backend: on `play`, clients play `audio_url` via HTMLAudioElement at `volume` (0–100 → 0–1), applying `volume_boost_db` via WebAudio GainNode when nonzero. On `stop`, halt immediately (<200ms). On connect, server sends a `state` message.
+`data_changed` fires after any REST mutation of kiosk-relevant data — scope `teams` (team created/renamed/deleted or active team changed), `players` (player create/update/delete/reorder/photo, and clip create/activate/delete — those change `active_*_clip_id`), `hype` (hype clip created/deleted). It carries no payload; clients refetch what they display via REST. The kiosk refreshes its grid on this event (debounced ~300ms) and after a WS reconnect (changes made while disconnected would otherwise be missed).
+
+Browser playback backend — client audio roles: every WS client mirrors playback state, but only a client holding the **player** role plays `audio_url` via HTMLAudioElement at `volume` (0–100 → 0–1, `volume_boost_db` via WebAudio GainNode when nonzero) and reports natural end-of-song (`POST /api/playback/stop` echoing `play_id`). Every other client is a **controller**: it sends commands and renders state but never produces sound and never reports `ended`. On `stop`, a player halts immediately (<200ms). On connect, the server sends a `state` message.
+
+The role is **opt-in and purely client-side**: a page is a silent controller unless it is opened with `?player=1` (the kiosk launcher passes it) or its top-bar speaker toggle is on (persisted in localStorage). The role belongs to the **device**, not to one page: an explicit `?player=0`|`1` wins at page load *and is remembered*, so the launcher's instruction can't be silenced by a toggle left off, and it survives navigation from the kiosk to `admin.html` and back (only `index.html` carries the toggle, so without this the Pi's own admin page would be a silent controller and a clip tested from the touchscreen would play nothing). The stored value decides when the param is absent. **Multiple simultaneous players are allowed by design** — the Pi kiosk plus, say, a spectator listening on a phone with a Bluetooth earpiece can both play the same clip. The server enforces no exclusivity, and no client can claim or revoke another client's role: "at most one player" is an operator convention, not an invariant. A client that becomes a player while a clip is already playing **joins it in progress**: it starts the clip at `elapsed_sec` rather than waiting for the next play. That applies both to turning the toggle on mid-song (the client refetches `GET /api/playback/state`) and to a player-role page that loads or reconnects mid-song (the `state` message carries everything needed). Turning the role *off* mid-song silences that device only — it never reports a stop, because muting your own phone must not end the clip for everyone else. Ending a play is likewise not a client concern whenever `server_eos` is true (see above), so extra listeners cannot cut each other short and such a play ends on time even with no listener at all. The `server_eos: false` exception still leans on a player-role client's `ended`, so a legacy clip with no stored duration and nobody listening stays "playing" until STOP.
 
 ## Teams
 
@@ -46,6 +54,8 @@ Browser playback backend: on `play`, clients play `audio_url` via HTMLAudioEleme
   them in next-batter, but they stay in the roster (admin always lists them).
 - `POST /api/teams/{team_id}/players` `{ "name", "jersey_number" }` → player
 - `PATCH /api/players/{id}` `{ "name"?, "jersey_number"?, "absent"? }` → player
+
+  Name validation is deliberately permissive (mid-game roster entry is fog-of-war): empty, whitespace-only, and explicit-`null` names are all accepted on create and patch — a `null` name is stored and returned as `""` (a player can be just a jersey number; this used to 500). `jersey_number` must be ≥ 0 when present (**422** otherwise); `null` clears it.
 - `DELETE /api/players/{id}` → 204 (cascades clips + files)
 - `POST /api/teams/{team_id}/players/reorder` `{ "player_ids": [..] }` → 204 (sets sort_order by array position). `player_ids` must be the team's **complete** roster, each id exactly once — otherwise 400 and no order change (a partial list would silently corrupt the order of omitted players).
 - `POST /api/players/{id}/photo` multipart `file` (jpg/png, ≤5MB, content-checked by magic bytes — a renamed non-image 400s) → `{ "photo_url" }`
@@ -118,10 +128,10 @@ Hype clip object:
 - `POST /api/playback/play` `{ "player_id", "type" }` → state (plays active clip of that type — `walkup`|`homerun`|`walkout`; 404 if none; stops current first)
 - `POST /api/playback/play_clip` `{ "clip_id" }` → state
 - `POST /api/playback/play_hype` `{ "hype_id" }` → state (404 if the hype clip doesn't exist; stops current first, then broadcasts WS `play` with `type: "hype"`, `player_id: null`, `clip_id` = hype id, `audio_url`, `volume`, `volume_boost_db`). `GET /api/playback/state` and the WS `state` message report `type: "hype"` while a hype clip is playing.
-- `POST /api/playback/stop` (body optional: `{ "play_id"? }`) → state (halt ≤200ms). Without a body (STOP button, GPIO): always stops. With `play_id` (the browser `ended` reporter): stops only if that play is still the current one — otherwise a no-op returning current state.
+- `POST /api/playback/stop` (body optional: `{ "play_id"? }`) → state (halt ≤200ms). Without a body (STOP button, GPIO): always stops. With `play_id` (the browser `ended` reporter, used only when `server_eos` was false): stops only if that play is still the current one — otherwise a no-op returning current state.
 - `POST /api/playback/volume` `{ "volume": 0-100 }` → state (persisted to settings)
 - `POST /api/playback/next` → state (next player in active team's batting order — wraps around — with an active walkup clip; plays it)
-- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "play_id", "volume", "audio_warning": null|"..." }` (`type` is a clip type or `"hype"`)
+- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "play_id", "volume", "audio_warning": null|"...", "audio_url", "volume_boost_db", "duration_sec", "elapsed_sec", "server_eos" }` (`type` is a clip type or `"hype"`). The last five are null while idle; while playing they describe the clip well enough for a client to **join it in progress** — `elapsed_sec` is how far in the play is, measured server-side from the play broadcast, and `server_eos` says whether this play ends on the server's clock (a client joining a `server_eos: false` play must report `ended`, as on the WS `play` event).
 
 ## Bluetooth speaker pairing
 
@@ -158,6 +168,8 @@ Status object:
 
 - `GET /api/settings` → `{ "default_snippet_length": 30, "master_volume": 80, "audio_output": "auto", "mock_gpio": true }`
 - `PATCH /api/settings` partial of the above → settings. Bounds: `default_snippet_length` 3–300 (seconds), `master_volume` 0–100; an out-of-range integer → **422**. An explicit `null` for a numeric field is silently ignored (200, the setting keeps its current value) — it is never stored, because a null would serialise as the string `"None"` and break later reads.
+
+  Environment interplay: `mock_gpio` is **read-only** — it reports the live `MOCK_GPIO` env value the GPIO layer actually booted with (a `mock_gpio` key in a PATCH is ignored). `audio_output` is patchable and persists, but a **changed** `AUDIO_OUTPUT` env value takes effect at the next boot and overwrites the stored setting (tracked via a sentinel, so an *unchanged* env never clobbers an admin-set value — previously the env was only honored on the very first boot). On the first boot of a database created before that tracking existed, the env is applied only if the stored value is still the default `auto`; any other stored value is kept (an admin's choice is indistinguishable from a stale seed there) and the env becomes the baseline for future comparisons.
 
 ## GPIO / mock buttons
 

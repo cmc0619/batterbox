@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Response
 
 from .. import db
 from ..models import ActiveTeamSet, TeamCreate, TeamUpdate
+from ..services import audio
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
@@ -19,6 +20,7 @@ def set_active_team(body: ActiveTeamSet):
     if db.get_team(body.team_id) is None:
         raise HTTPException(404, f"team {body.team_id} not found")
     db.set_active_team_id(body.team_id)
+    audio.notify_data_changed("teams")
     return {"team_id": body.team_id}
 
 
@@ -29,7 +31,9 @@ def list_teams():
 
 @router.post("", status_code=201)
 def create_team(body: TeamCreate):
-    return db.create_team(body.name)
+    team = db.create_team(body.name)
+    audio.notify_data_changed("teams")
+    return team
 
 
 @router.patch("/{team_id}")
@@ -37,6 +41,7 @@ def update_team(team_id: int, body: TeamUpdate):
     team = db.update_team(team_id, body.name)
     if team is None:
         raise HTTPException(404, f"team {team_id} not found")
+    audio.notify_data_changed("teams")
     return team
 
 
@@ -44,4 +49,5 @@ def update_team(team_id: int, body: TeamUpdate):
 def delete_team(team_id: int):
     if not db.delete_team(team_id):
         raise HTTPException(404, f"team {team_id} not found")
+    audio.notify_data_changed("teams")
     return Response(status_code=204)

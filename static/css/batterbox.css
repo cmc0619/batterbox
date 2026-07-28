@@ -162,6 +162,19 @@ a { color: var(--accent-2); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Device audio-role toggle: lit green = this device is the speaker
+   (plays WS play events); dark = silent controller. */
+#btn-sound {
+  flex: 0 0 auto;
+  min-width: 84px;
+  font-size: 30px;
+  padding: 10px 12px;
+}
+#btn-sound.on {
+  background: #14532d;
+  border-color: var(--ok);
+}
+
 #btn-stop {
   flex: 0 0 auto;
   min-width: 190px;

@@ -68,9 +68,9 @@ if command -v squeekboard >/dev/null 2>&1; then
     trap '[ -n "${OSK_PID}" ] && kill "${OSK_PID}" 2>/dev/null' EXIT
 fi
 
-echo "[batterbox-kiosk] launching ${CHROMIUM} in kiosk mode at ${URL}"
+echo "[batterbox-kiosk] launching ${CHROMIUM} in kiosk mode at ${URL} (audio player role)"
 exec "${CHROMIUM}" \
-    --kiosk "${URL}" \
+    --kiosk "${URL}/?player=1" \
     --window-size=1024,600 \
     --start-fullscreen \
     --incognito \

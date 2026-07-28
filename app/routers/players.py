@@ -7,6 +7,7 @@ from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
 from .. import config, db
 from ..models import PlayerCreate, PlayersReorder, PlayerUpdate
+from ..services import audio
 
 router = APIRouter(tags=["players"])
 
@@ -25,20 +26,31 @@ def list_players(team_id: int):
 def create_player(team_id: int, body: PlayerCreate):
     if db.get_team(team_id) is None:
         raise HTTPException(404, f"team {team_id} not found")
-    return db.create_player(team_id, body.name, body.jersey_number)
+    # Null name → "" (column is NOT NULL; a nameless player is fine).
+    player = db.create_player(team_id, body.name or "", body.jersey_number)
+    audio.notify_data_changed("players")
+    return player
 
 
 @router.patch("/api/players/{player_id}")
 def update_player(player_id: int, body: PlayerUpdate):
     if db.get_player(player_id) is None:
         raise HTTPException(404, f"player {player_id} not found")
-    return db.update_player(player_id, body.model_dump(exclude_unset=True))
+    fields = body.model_dump(exclude_unset=True)
+    if "name" in fields and fields["name"] is None:
+        # Accept an explicit null name (store "" — the column is NOT NULL and
+        # an unguarded null used to 500 the whole PATCH).
+        fields["name"] = ""
+    player = db.update_player(player_id, fields)
+    audio.notify_data_changed("players")
+    return player
 
 
 @router.delete("/api/players/{player_id}", status_code=204)
 def delete_player(player_id: int):
     if not db.delete_player(player_id):
         raise HTTPException(404, f"player {player_id} not found")
+    audio.notify_data_changed("players")
     return Response(status_code=204)
 
 
@@ -56,6 +68,7 @@ def reorder_players(team_id: int, body: PlayersReorder):
             400, "player_ids must contain every player of the team exactly once"
         )
     db.reorder_players(team_id, body.player_ids)
+    audio.notify_data_changed("players")
     return Response(status_code=204)
 
 
@@ -92,6 +105,7 @@ async def upload_photo(player_id: int, file: UploadFile = File(...)):
         raise HTTPException(500, f"failed to store photo: {e}") from e
     photo_url = f"/media/photos/{filename}"
     db.set_player_photo(player_id, photo_url)
+    audio.notify_data_changed("players")
     # Only now remove a previous photo with a different extension (same-ext
     # uploads were replaced in place by the rename above).
     old = player.get("photo_url")
