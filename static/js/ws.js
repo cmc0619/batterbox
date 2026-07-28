@@ -106,6 +106,10 @@ async function joinCurrentPlay() {
   let s;
   try { s = await api('/api/playback/state'); } catch { return; }
   if (!isPlayer || s.status !== 'playing' || !s.audio_url) return;
+  // A newer play can start while that request is in flight; its `play`
+  // event already began the right clip here, so applying this now-stale
+  // response would swap the crowd's song for the previous one.
+  if (lastPlayId !== null && s.play_id !== lastPlayId) return;
   const offset = Number(s.elapsed_sec) || 0;
   if (s.duration_sec && offset >= s.duration_sec) return; // all but over
   lastPlayId = s.play_id ?? null;
