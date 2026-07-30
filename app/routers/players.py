@@ -114,7 +114,16 @@ async def upload_photo(player_id: int, file: UploadFile = File(...)):
     except OSError as e:
         raise HTTPException(500, f"failed to store photo: {e}") from e
     photo_url = f"/media/photos/{filename}"
-    db.set_player_photo(player_id, photo_url)
+    if not db.set_player_photo(player_id, photo_url):
+        # Player (or their team) deleted while the bytes were being written.
+        # Without this the handler returned 200 and the file was orphaned
+        # FOREVER — photos/ is the one media dir the orphan sweep doesn't
+        # reconcile (nothing else names files there).
+        try:
+            os.remove(os.path.join(photos_dir, filename))
+        except OSError:
+            pass
+        raise HTTPException(404, f"player {player_id} not found")
     audio.notify_data_changed("players")
     # Only now remove a previous photo with a different extension (same-ext
     # uploads were replaced in place by the rename above).

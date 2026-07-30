@@ -60,7 +60,7 @@ The role is **opt-in and purely client-side**: a page is a silent controller unl
   Name validation is deliberately permissive (mid-game roster entry is fog-of-war): empty, whitespace-only, and explicit-`null` names are all accepted on create and patch — a `null` name is stored and returned as `""` (a player can be just a jersey number; this used to 500). `jersey_number` must be ≥ 0 when present (**422** otherwise); `null` clears it.
 - `DELETE /api/players/{id}` → 204 (cascades clips + files)
 - `POST /api/teams/{team_id}/players/reorder` `{ "player_ids": [..] }` → 204 (sets sort_order by array position). `player_ids` must be the team's **complete** roster, each id exactly once — otherwise 400 and no order change (a partial list would silently corrupt the order of omitted players).
-- `POST /api/players/{id}/photo` multipart `file` (jpg/png, ≤5MB, content-checked by magic bytes — a renamed non-image 400s) → `{ "photo_url" }`
+- `POST /api/players/{id}/photo` multipart `file` (jpg/png, ≤5MB, content-checked by magic bytes — a renamed non-image 400s) → `{ "photo_url" }`. **404** if the player doesn't exist, including when it (or its team) is deleted *while the upload is being written* — the stored file is removed again, so a losing upload leaves nothing behind (`photos/` is not covered by the orphan sweep).
 
 ## Clips
 
