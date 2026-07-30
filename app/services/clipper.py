@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import time
@@ -185,6 +186,16 @@ def sweep_orphan_media(startup: bool = False) -> None:
 
     if removed:
         log.info("orphan media sweep reclaimed %d file(s)", removed)
+
+
+def _is_foreign_key_error(e: sqlite3.IntegrityError) -> bool:
+    """True only for a FOREIGN KEY violation, not CHECK / NOT NULL / UNIQUE.
+    sqlite_errorname is exact (Python 3.11+); the message check is the fallback
+    for anything older."""
+    name = getattr(e, "sqlite_errorname", "")
+    if name:
+        return name == "SQLITE_CONSTRAINT_FOREIGNKEY"
+    return "FOREIGN KEY" in str(e)
 
 
 class JobError(Exception):
@@ -779,19 +790,35 @@ def create_clip(
         tmp = _render_to_temp(
             src, "clips", trim_start_sec, trim_end_sec, duration, fade_in_ms, fade_out_ms
         )
-        clip_id = db.insert_clip(
-            player_id=player_id,
-            clip_type=clip_type,
-            source=job["source"],
-            source_url=job["source_url"],
-            duration_sec=duration,
-            trim_start_sec=trim_start_sec,
-            trim_end_sec=trim_end_sec,
-            fade_in_ms=fade_in_ms,
-            fade_out_ms=fade_out_ms,
-            volume_boost_db=volume_boost_db,
-            source_file=src_name,
-        )
+        try:
+            clip_id = db.insert_clip(
+                player_id=player_id,
+                clip_type=clip_type,
+                source=job["source"],
+                source_url=job["source_url"],
+                duration_sec=duration,
+                trim_start_sec=trim_start_sec,
+                trim_end_sec=trim_end_sec,
+                fade_in_ms=fade_in_ms,
+                fade_out_ms=fade_out_ms,
+                volume_boost_db=volume_boost_db,
+                source_file=src_name,
+            )
+        except sqlite3.IntegrityError as e:
+            # The render is useless either way — drop it before deciding how to
+            # report the failure.
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            # Only a FOREIGN KEY violation means "the owning player was
+            # cascade-deleted during the multi-second render" (cascade deletes
+            # don't take the per-item lock). CHECK / NOT NULL violations are
+            # genuine bugs — reporting those as a lost race would hide them
+            # behind a plausible 400, so let them surface as a 500.
+            if not _is_foreign_key_error(e):
+                raise
+            raise JobError(
+                f"player {player_id} was deleted while the clip was rendering"
+            ) from None
         try:
             os.replace(tmp, os.path.join(config.DATA_DIR, "clips", f"{clip_id}.mp3"))
         except Exception:
@@ -804,7 +831,18 @@ def create_clip(
             raise
     finally:
         db.release_source_in_use(src_name)
-    return db.get_clip(clip_id)
+    clip = db.get_clip(clip_id)
+    if clip is None:
+        # A cascade delete can also land in the (much smaller) window between
+        # the insert's COMMIT and the rename above: the row goes, the rename
+        # still succeeds, and <id>.mp3 is left owning nothing. Returning it
+        # would answer 201 with a null body. Same outcome as losing the race
+        # during the render — discard the file and report the loss.
+        _discard_render("clips", clip_id)
+        raise JobError(
+            f"player {player_id} was deleted while the clip was rendering"
+        )
+    return clip
 
 
 def create_hype(
