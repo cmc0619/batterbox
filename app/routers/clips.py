@@ -1,6 +1,7 @@
 """Clip endpoints: list, async imports (youtube/upload), jobs, render,
 activate, delete (per docs/API.md)."""
 
+import asyncio
 import os
 
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
@@ -47,7 +48,12 @@ async def import_upload(player_id: int, type: str, file: UploadFile = File(...))
     if not data:
         raise HTTPException(400, "empty file")
     try:
-        job = clipper.start_upload_job(player_id, type, ext, data)
+        # Worker thread: this writes up to 50MB to the SD card, and a
+        # synchronous write here stalls the event loop — every WS broadcast
+        # and playback command — for the duration.
+        job = await asyncio.to_thread(
+            clipper.start_upload_job, player_id, type, ext, data
+        )
     except clipper.JobError as e:
         raise HTTPException(429, str(e)) from e
     return {"job_id": job["job_id"]}

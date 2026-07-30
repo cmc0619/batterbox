@@ -1,5 +1,6 @@
 """Player endpoints: CRUD, reorder, photo upload (per docs/API.md)."""
 
+import asyncio
 import os
 import uuid
 
@@ -95,13 +96,22 @@ async def upload_photo(player_id: int, file: UploadFile = File(...)):
     # Temp-then-replace: a failed write can't leave the player pointing at a
     # truncated (or already-deleted) photo.
     tmp = os.path.join(photos_dir, f"{filename}.{uuid.uuid4().hex[:8]}.tmp")
+
+    def _store() -> None:
+        # Worker thread (via to_thread below): a multi-MB SD-card write on the
+        # event loop stalls every WS broadcast and playback command.
+        try:
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, os.path.join(photos_dir, filename))
+        except OSError:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
+
     try:
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, os.path.join(photos_dir, filename))
+        await asyncio.to_thread(_store)
     except OSError as e:
-        if os.path.exists(tmp):
-            os.remove(tmp)
         raise HTTPException(500, f"failed to store photo: {e}") from e
     photo_url = f"/media/photos/{filename}"
     db.set_player_photo(player_id, photo_url)
