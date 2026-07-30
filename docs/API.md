@@ -16,12 +16,14 @@ Server → client JSON messages. Clients never send.
 { "event": "stop" }
 { "event": "volume",  "volume": 65 }
 { "event": "warning", "message": "No audio output device found" }
-{ "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "play_id": 13, "volume": 80, "audio_url": null, "volume_boost_db": null, "duration_sec": null, "elapsed_sec": null, "server_eos": null }
-{ "event": "state",   "status": "playing", "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 14, "volume": 80, "audio_url": "/media/clips/3.mp3", "volume_boost_db": 0.0, "duration_sec": 12.0, "elapsed_sec": 4.13, "server_eos": true }
+{ "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "play_id": 13, "volume": 80, "audio_warning": null, "audio_url": null, "volume_boost_db": null, "duration_sec": null, "elapsed_sec": null, "server_eos": null }
+{ "event": "state",   "status": "playing", "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 14, "volume": 80, "audio_warning": null, "audio_url": "/media/clips/3.mp3", "volume_boost_db": 0.0, "duration_sec": 12.0, "elapsed_sec": 4.13, "server_eos": true }
 { "event": "data_changed", "scope": "teams" }
 ```
 
 `play_id` is a monotonic per-play token. Clients that report natural end-of-song echo it back (see `POST /api/playback/stop`) so a delayed `ended` from a previous clip can't stop the current one.
+
+`audio_warning` on the `state` message is the most recent playback warning (or `null`), same as on `GET /api/playback/state` — so a client that connects **after** a warning was raised (kiosk reload, WS reconnect) can still surface it; the live `warning` event only reaches clients connected when it fired. A new play clears it.
 
 **End of song belongs to the server.** `server_eos: true` means the server will end the play itself when the clip's own duration elapses (plus ~1s of grace for client start latency), and clients **must not** report `ended` — with several devices opted in to play, the first one to finish would otherwise stop the clip for all the others, and with no player-role client connected nothing would report at all. `server_eos: false` (a legacy row with no stored `duration_sec`) means there is no server-side end detection for that play, so a player-role client still reports `ended`. The `AUDIO_BACKEND=server` (mpv) path always reports `server_eos: false` and ends the play from mpv's own EOF instead.
 

@@ -124,7 +124,10 @@ app.include_router(settings.router)
 async def websocket_endpoint(websocket: WebSocket):
     await audio.ws_manager.connect(websocket)
     state = audio.get_state()
-    state.pop("audio_warning", None)  # WS state shape per contract
+    # audio_warning rides along (contract): a client that connects AFTER a
+    # warning was raised (kiosk reload, reconnect) would otherwise never see
+    # it — the live `warning` event only reaches clients connected at the
+    # moment it fired.
     await websocket.send_text(json.dumps({"event": "state", **state}))
     try:
         while True:  # clients never send; this just holds the socket open
