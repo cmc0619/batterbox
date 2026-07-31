@@ -31,6 +31,19 @@ _CMD_TIMEOUT = 10  # seconds; nmcli answers fast or not at all
 _ENABLE_TIMEOUT = 30  # bringing up an AP (scan/channel negotiation) can take a while
 
 
+def _redact(args: list[str]) -> list[str]:
+    """Copy of `args` with any password VALUE masked.
+
+    The timeout message below is logged AND handed back to the client, and
+    `connect_client` passes someone else's network password on that argv —
+    the hotspot password is public by design, a joined network's is not."""
+    safe = list(args)
+    for i in range(len(safe) - 1):
+        if safe[i] == "password":
+            safe[i + 1] = "***"
+    return safe
+
+
 def _run(args: list[str], timeout: int = _CMD_TIMEOUT) -> tuple[bool, str]:
     """Run nmcli non-interactively. Never raises."""
     try:
@@ -43,7 +56,7 @@ def _run(args: list[str], timeout: int = _CMD_TIMEOUT) -> tuple[bool, str]:
     except FileNotFoundError:
         return False, "nmcli not installed"
     except subprocess.TimeoutExpired:
-        return False, f"nmcli {' '.join(args)} timed out"
+        return False, f"nmcli {' '.join(_redact(args))} timed out"
     except Exception as e:  # noqa: BLE001 - must never leak to routers
         return False, str(e)
     out = ((proc.stdout or "") + (proc.stderr or "")).strip()
