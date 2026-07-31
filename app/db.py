@@ -546,13 +546,15 @@ def update_player(player_id: int, fields: dict) -> dict | None:
     return get_player(player_id)
 
 
-def set_player_photo(player_id: int, photo_url: str) -> None:
+def set_player_photo(player_id: int, photo_url: str) -> bool:
+    """Returns False if the player no longer exists (deleted mid-upload)."""
     with _lock:
         conn = get_conn()
-        conn.execute(
+        cur = conn.execute(
             "UPDATE players SET photo_url = ? WHERE id = ?", (photo_url, player_id)
         )
         conn.commit()
+    return cur.rowcount > 0
 
 
 def delete_player(player_id: int) -> bool:
