@@ -51,6 +51,12 @@ class YoutubeImport(BaseModel):
 # sane window around the editor UI's -12..+12 range.
 FiniteSec = Annotated[float, Field(allow_inf_nan=False)]
 BoostDb = Annotated[float, Field(ge=-24, le=24, allow_inf_nan=False)]
+# Fades were the one trim field with no bound at all, so a hand-crafted
+# million-ms fade was storable. ffmpeg shrugs (afade past the end just fades
+# what's there), but the value is meaningless and the field should be bounded
+# like the boost beside it. 60s is far past the editor UI's 5s cap and past
+# any clip anyone trims here.
+FadeMs = Annotated[int, Field(ge=0, le=60_000)]
 
 
 class ClipCreate(BaseModel):
@@ -59,16 +65,16 @@ class ClipCreate(BaseModel):
     type: ClipType
     trim_start_sec: FiniteSec
     trim_end_sec: FiniteSec
-    fade_in_ms: int = 0
-    fade_out_ms: int = 0
+    fade_in_ms: FadeMs = 0
+    fade_out_ms: FadeMs = 0
     volume_boost_db: BoostDb = 0.0
 
 
 class ClipPatch(BaseModel):
     trim_start_sec: FiniteSec
     trim_end_sec: FiniteSec
-    fade_in_ms: int
-    fade_out_ms: int
+    fade_in_ms: FadeMs
+    fade_out_ms: FadeMs
     volume_boost_db: BoostDb
 
 
@@ -101,8 +107,8 @@ class HypeCreate(BaseModel):
     title: str = Field(min_length=1, max_length=80)
     trim_start_sec: FiniteSec
     trim_end_sec: FiniteSec
-    fade_in_ms: int = 0
-    fade_out_ms: int = 0
+    fade_in_ms: FadeMs = 0
+    fade_out_ms: FadeMs = 0
     volume_boost_db: BoostDb = 0.0
 
 

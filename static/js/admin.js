@@ -25,11 +25,22 @@ function showBanner(msg, sticky = true) {
 }
 function hideBanner() { banner.classList.remove('show'); }
 
+// null = blank (backend takes int|null; '' would 422 the whole save).
+// undefined = not a jersey number — callers show JERSEY_HINT instead of
+// posting it. parseInt() used to let "12abc" through as 12 and passed
+// "abc"/"-1" straight to the backend, surfacing a raw pydantic 422
+// ("Input should be a valid integer...") in the banner.
+const JERSEY_HINT = 'Jersey number must be a whole number, 0 or more (or leave it blank).';
+
 function jerseyOf(input) {
   const v = String(input).trim();
-  if (v === '') return null; // backend takes int|null; '' would 422 the whole save
-  const n = parseInt(v, 10);
-  return Number.isNaN(n) ? v : n;
+  if (v === '') return null;
+  if (!/^\d+$/.test(v)) return undefined;
+  const n = Number(v);
+  // Digits alone aren't enough: Number('9007199254740993') rounds to
+  // ...992, so the save would store a different number than the one
+  // typed — the same silent swap the digits-only check exists to stop.
+  return Number.isSafeInteger(n) ? n : undefined;
 }
 
 function jerseyPlaceholder(player) {
@@ -346,10 +357,12 @@ function buildDetail(p) {
   const saveB = document.createElement('button');
   saveB.type = 'button'; saveB.className = 'btn-primary'; saveB.textContent = 'Save';
   saveB.addEventListener('click', async () => {
+    const jersey = jerseyOf(ji.value);
+    if (jersey === undefined) { showBanner(JERSEY_HINT, false); return; }
     try {
       await BB.api(`/api/players/${p.id}`, {
         method: 'PATCH',
-        body: { name: ni.value.trim() || p.name, jersey_number: jerseyOf(ji.value) },
+        body: { name: ni.value.trim() || p.name, jersey_number: jersey },
       });
       await loadPlayers();
     } catch (err) { showBanner(err.message, false); }
@@ -577,10 +590,12 @@ document.getElementById('btn-add-player').addEventListener('click', async () => 
   const jerseyIn = document.getElementById('new-player-jersey');
   const name = nameIn.value.trim();
   if (!name) return;
+  const jersey = jerseyOf(jerseyIn.value);
+  if (jersey === undefined) { showBanner(JERSEY_HINT, false); return; }
   try {
     await BB.api(`/api/teams/${selectedTeamId}/players`, {
       method: 'POST',
-      body: { name, jersey_number: jerseyOf(jerseyIn.value) },
+      body: { name, jersey_number: jersey },
     });
     nameIn.value = '';
     jerseyIn.value = '';
