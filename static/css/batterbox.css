@@ -665,6 +665,9 @@ body.admin, body.editor {
 .editor-controls label { font-size: 18px; font-weight: 700; display: block; margin-bottom: 4px; }
 .editor-controls input { width: 100%; }
 .editor-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+/* Preview is the raw source (wavesurfer streams sources/<file>); the render
+   applies fades + boost + loudnorm. Say so, or the difference reads as a bug. */
+.editor-note { margin-top: 10px; font-size: 18px; line-height: 1.4; color: var(--dim); }
 .editor-actions button { min-height: 72px; font-size: 24px; padding: 12px 28px; }
 #job-status {
   font-size: 20px;
