@@ -83,12 +83,14 @@ function detectAudioRole() {
 }
 
 let isPlayer = detectAudioRole();
+let playbackGeneration = 0;
 
 function setAudioPlayer(v) {
   const was = isPlayer;
   isPlayer = !!v;
   storeAudioRole(isPlayer);
   if (!isPlayer) {
+    playbackGeneration++;
     audio.pause();
     try { audio.currentTime = 0; } catch { /* not loaded yet */ }
     activePlayId = null;
@@ -103,13 +105,11 @@ function setAudioPlayer(v) {
 // Opting in mid-song: pick up the clip already in progress at the offset the
 // server reports, instead of standing there silent until the next batter.
 async function joinCurrentPlay() {
+  const generation = playbackGeneration;
   let s;
   try { s = await api('/api/playback/state'); } catch { return; }
+  if (generation !== playbackGeneration) return;
   if (!isPlayer || s.status !== 'playing' || !s.audio_url) return;
-  // A newer play can start while that request is in flight; its `play`
-  // event already began the right clip here, so applying this now-stale
-  // response would swap the crowd's song for the previous one.
-  if (lastPlayId !== null && s.play_id !== lastPlayId) return;
   const offset = Number(s.elapsed_sec) || 0;
   if (s.duration_sec && offset >= s.duration_sec) return; // all but over
   lastPlayId = s.play_id ?? null;
@@ -160,6 +160,8 @@ let activePlayId = null;
 
 function startAudio({ playId = null, audioUrl, volume, boostDb, offset = 0 }) {
   if (!audioUrl) return;
+  const generation = ++playbackGeneration;
+  const expectedSrc = new URL(audioUrl, location.href).href;
   const vol = Math.max(0, Math.min(100, volume ?? lastState.volume ?? 80));
   audio.volume = vol / 100;
   const boost = Number(boostDb) || 0;
@@ -172,11 +174,21 @@ function startAudio({ playId = null, audioUrl, volume, boostDb, offset = 0 }) {
   }
   activePlayId = playId;
   audio.src = audioUrl;
-  const start = () => audio.play().catch((e) => console.warn('audio.play() rejected', e));
+  const isCurrent = () => (
+    generation === playbackGeneration
+    && isPlayer
+    && activePlayId === playId
+    && audio.src === expectedSrc
+  );
+  const start = () => {
+    if (!isCurrent()) return;
+    audio.play().catch((e) => console.warn('audio.play() rejected', e));
+  };
   if (offset > 0) {
     // Seek before starting — seeking after play() is audible as a blip, and
     // currentTime can't be set until the metadata is in.
     audio.addEventListener('loadedmetadata', () => {
+      if (!isCurrent()) return;
       try { audio.currentTime = offset; } catch { /* not seekable */ }
       start();
     }, { once: true });
@@ -202,6 +214,7 @@ function handlePlay(msg) {
 
 function handleStop() {
   // Halt immediately (well under the 200ms budget).
+  playbackGeneration++;
   audio.pause();
   try { audio.currentTime = 0; } catch { /* not loaded yet */ }
   activePlayId = null;
