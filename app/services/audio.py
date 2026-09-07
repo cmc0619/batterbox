@@ -184,6 +184,8 @@ def _server_play(clip: dict, subdir: str = "clips") -> subprocess.Popen | None:
     ]
     audio_output = db.get_setting("audio_output", config.AUDIO_OUTPUT)
     if audio_output and audio_output != "auto":
+        if audio_output.startswith(("hw:", "plughw:")):
+            audio_output = f"alsa/{audio_output}"
         cmd.append(f"--audio-device={audio_output}")
     boost = clip.get("volume_boost_db") or 0.0
     if boost:
