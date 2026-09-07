@@ -40,8 +40,9 @@ services:
       #     ALSA (/dev/snd). Use this if you don't want a browser open on
       #     the Pi (headless, phones-only operation). Requires the
       #     /dev/snd device mapping above, and AUDIO_OUTPUT set to your
-      #     ALSA device if "auto" picks the wrong one (e.g. "plughw:1,0"
-      #     for a USB audio dongle).
+      #     mpv device if "auto" picks the wrong one (for example,
+      #     "alsa/plughw:1,0" for a USB audio dongle). Copy the exact
+      #     identifier from `mpv --audio-device=help`.
       #
       # AUDIO_BACKEND: server
       AUDIO_OUTPUT: ${AUDIO_OUTPUT:-auto}

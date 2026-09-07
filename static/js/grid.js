@@ -225,15 +225,6 @@ let currentTeamId = null;
 let rosterSeq = 0;
 let hypeSeq = 0;
 
-async function loadPlayers(teamId, { keepPage = false, seq = null } = {}) {
-  const rows = await BB.api(`/api/teams/${teamId}/players`);
-  if (seq !== null && seq !== rosterSeq) return; // superseded mid-flight
-  // absent players stay in the roster (admin) but never appear on the kiosk
-  players = rows.filter((p) => !p.absent);
-  if (!keepPage) page = 0; // render() clamps a kept page if the list shrank
-  render();
-}
-
 async function loadHype() {
   const seq = ++hypeSeq;
   const rows = await BB.api('/api/hype');
@@ -260,11 +251,25 @@ async function loadTeams({ keepPage = false } = {}) {
     return;
   }
   const teamChanged = selected !== currentTeamId;
-  currentTeamId = selected;
   const team = teams.find((t) => t.id === selected);
+  let rows;
+  try {
+    rows = await BB.api(`/api/teams/${selected}/players`);
+  } catch (err) {
+    if (seq === rosterSeq && teamChanged) {
+      players = [];
+      page = 0;
+      render();
+    }
+    throw err;
+  }
+  if (seq !== rosterSeq) return; // superseded mid-flight
+  currentTeamId = selected;
   teamNameEl.textContent = team ? team.name : 'BatterBox';
-  // A different team is a fresh grid — always back to page 1.
-  await loadPlayers(selected, { keepPage: keepPage && !teamChanged, seq });
+  // absent players stay in the roster (admin) but never appear on the kiosk
+  players = rows.filter((p) => !p.absent);
+  if (!keepPage || teamChanged) page = 0; // render() clamps a kept page if the list shrank
+  render();
 }
 
 /* ---------------- controls ---------------- */

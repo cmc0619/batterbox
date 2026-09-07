@@ -91,7 +91,7 @@ Target: **Raspberry Pi 4 (any RAM), 64-bit Raspberry Pi OS Bookworm** — the on
 
 3. **Kiosk display** (full-screen touchscreen UI on the Pi's display):
 
-   **No KDE, Gnome, or any desktop environment is needed — and none is used.** The "window system" is one of two tiny options; both just put Chromium's kiosk window on the HDMI touchscreen. There is no Qt app and nothing to write in Qt — Chromium *is* the UI runtime, pointed at `http://localhost:8080`.
+   **No KDE, Gnome, or any desktop environment is needed — and none is used.** The "window system" is one of two tiny options; both just put Chromium's kiosk window on the HDMI touchscreen. There is no Qt app and nothing to write in Qt — Chromium *is* the UI runtime, pointed at `http://localhost` through the Pi compose port-80 mapping.
 
    **Option A — Raspberry Pi OS Lite + cage (recommended, lightest).** [cage](https://github.com/cage-kiosk/cage) is a Wayland kiosk compositor: it is the entire "window manager", runs exactly one app full-screen, and is made for appliances like this. Touch works out of the box via libinput.
 
@@ -113,7 +113,7 @@ Target: **Raspberry Pi 4 (any RAM), 64-bit Raspberry Pi OS Bookworm** — the on
    # edit ~/.config/autostart/batterbox-kiosk.desktop if the repo isn't at /home/pi/batterbox
    ```
 
-   Either way the kiosk script waits for the app to answer on port 8080, then opens Chromium full-screen. Audio plays through the browser out the 3.5mm jack / HDMI / USB DAC — plug your speaker/PA into the Pi.
+   Either way the kiosk script waits for the app to answer on port 80, then opens Chromium full-screen. A slow backend keeps the launcher waiting after its warning threshold instead of opening Chromium on a connection-error page. Set `BATTERBOX_URL` only if you use a different host mapping (for example, `BATTERBOX_URL=http://localhost:8080`). Audio plays through the browser out the 3.5mm jack / HDMI / USB DAC — plug your speaker/PA into the Pi.
 
    **On-screen keyboard (no physical keyboard attached):** install `squeekboard` on the Pi (`sudo apt install squeekboard`). The kiosk launcher starts it automatically when present — it pops up whenever a text field (Wi-Fi SSID/password, player names, YouTube URLs) gains focus and hides after. Without it, text fields are unreachable on the touchscreen. **Lockout recovery even without an OSK:** the Wi-Fi **Start Hotspot** button needs no typing (it uses the stored SSID/password) — kiosk → ADMIN → Start Hotspot → join `BatterBox` from a phone → fix Wi-Fi from the phone's browser.
 
@@ -157,7 +157,7 @@ Default is `AUDIO_BACKEND=browser`: the kiosk Chromium on the Pi plays the sound
 
 With the browser backend, only **player-role** clients make sound — the kiosk launcher opens `/?player=1`, and the kiosk top bar has a speaker toggle any device can use to opt itself in. Every page starts silent, so phones and forgotten admin tabs no longer echo the song over each other. Opting in is deliberately open rather than exclusive: a spectator can turn sound on for their own phone (handy with a Bluetooth earpiece) and nobody can mute or hijack anyone else's device. That also means "one speaker" is up to you, not enforced — if two devices near each other are both on, you'll hear both. Turning sound on partway through a song joins that song where it already is, and turning it off silences only that device — the song keeps playing everywhere else.
 
-If you want the Pi headless (no browser, phones only), set `AUDIO_BACKEND=server` in `docker-compose.pi.yml` — mpv inside the container plays directly to ALSA via the mapped `/dev/snd`. You may need `AUDIO_OUTPUT` (e.g. `plughw:1,0` for a USB dongle) if auto picks the wrong device.
+If you want the Pi headless (no browser, phones only), set `AUDIO_BACKEND=server` in `docker-compose.pi.yml` — mpv inside the container plays directly to ALSA via the mapped `/dev/snd`. You may need `AUDIO_OUTPUT` (e.g. `alsa/plughw:1,0` for a USB dongle) if auto picks the wrong device. Run `mpv --audio-device=help` in the container and copy the exact identifier it reports.
 
 ### Bluetooth speaker
 
@@ -183,7 +183,7 @@ All env vars, settable in `docker-compose.yml` / `.env` / shell:
 | `DATA_DIR`      | `/data`   | SQLite DB + clips/photos/sources (mounted to `./data` on the host)      |
 | `MOCK_GPIO`     | `true`    | `true` = keyboard/on-screen mock buttons; `false` = real GPIO (Pi)      |
 | `AUDIO_BACKEND` | `browser` | `browser` = clients play audio; `server` = mpv in-container to ALSA     |
-| `AUDIO_OUTPUT`  | `auto`    | ALSA device hint for server playback (e.g. `plughw:1,0`)                |
+| `AUDIO_OUTPUT`  | `auto`    | mpv audio-device identifier (e.g. `alsa/plughw:1,0`; copy from `mpv --audio-device=help`) |
 | `YTDLP_AUTO_UPDATE` | `true` | `true` = upgrade yt-dlp to latest at container start when online        |
 
 Playback settings (default snippet length, master volume) are also editable live in admin.
@@ -211,7 +211,7 @@ Designed for a **Hammond 1456KH3BKBU** sloped aluminum console (254 × 211 × 76
 ## Troubleshooting
 
 - **Physical buttons do nothing on the Pi** — check `docker compose logs app` for the `[gpio]` lines from the startup self-check. You want `[gpio] pin factory: LGPIOFactory`. The ERROR lines mean lgpio didn't install (rebuild the image) or `/dev/gpiochip0` isn't mapped (use docker-compose.pi.yml). Silent mock-GPIO fallback on real hardware is exactly what this check exists to catch.
-- **"No audio output device found" warning** — the app couldn't find a sound device. With `browser` backend this is just informational (browsers play their own audio); with `server` backend, check that `/dev/snd` is mapped (Pi compose file), the speaker is plugged in before container start, and try setting `AUDIO_OUTPUT` explicitly (`aplay -l` on the Pi lists devices).
+- **"No audio output device found" warning** — the app couldn't find a sound device. With `browser` backend this is just informational (browsers play their own audio); with `server` backend, check that `/dev/snd` is mapped (Pi compose file), the speaker is plugged in before container start, then run `mpv --audio-device=help` in the container and set `AUDIO_OUTPUT` to the exact identifier it lists.
 - **YouTube imports fail** — YouTube changes its internals regularly; yt-dlp answers with frequent releases. Two layers of defense:
   1. **At every container start with internet access, BatterBox auto-upgrades yt-dlp to the latest release** (check `docker compose logs app` for the `[entrypoint] yt-dlp` line). Offline (the field), it silently keeps the baked-in version. Disable with `YTDLP_AUTO_UPDATE=false`.
   2. The pin in `requirements.txt` is the known-good fallback baked into the image — what you tested at home is what runs at the field. If imports break even after the auto-update, bump the pin and rebuild:
@@ -224,6 +224,7 @@ Designed for a **Hammond 1456KH3BKBU** sloped aluminum console (254 × 211 × 76
 
 - **Nothing downloads at the field** — expected. YouTube import needs internet. Import at home; the field run is fully offline.
 - **Tapping tiles is silent everywhere** — no device holds the audio player role. Tap the speaker toggle on the kiosk top bar (turns green), open the kiosk as `/?player=1`, or use `AUDIO_BACKEND=server`. (The song still ends on time and the tile stops pulsing either way — the server tracks the clip's length itself.)
+- **The kiosk keeps printing "continuing to wait"** — the launcher deliberately will not open Chromium until `${BATTERBOX_URL:-http://localhost}/api/settings` answers. Check `docker compose logs app`; if you changed the Pi's host port, export the matching `BATTERBOX_URL`.
 - **Chromium shows a "restore pages?" bubble** — the kiosk script already passes `--disable-session-crashed-bubble` and `--incognito`; if you see it anyway you killed power mid-write. It's harmless; tap through once.
 - **Container logs** — `docker compose logs -f app`.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # BatterBox kiosk launcher — runs on the Raspberry Pi (host, not Docker).
 #
-# Waits for the BatterBox container to answer on localhost:8080, then opens
+# Waits for the BatterBox container to answer on localhost, then opens
 # Chromium full-screen (kiosk) tuned for the 1024x600 official touchscreen.
 # No desktop environment (KDE/Gnome) is required — pick one display path:
 #
@@ -24,17 +24,18 @@
 
 set -u
 
-URL="${BATTERBOX_URL:-http://localhost:8080}"
+URL="${BATTERBOX_URL:-http://localhost}"
 MAX_WAIT="${BATTERBOX_KIOSK_WAIT:-120}"   # seconds to wait for the app
 
 echo "[batterbox-kiosk] waiting for ${URL} (up to ${MAX_WAIT}s)..."
 elapsed=0
+warned=false
 until curl -fsS --max-time 2 "${URL}/api/settings" >/dev/null 2>&1; do
     sleep 2
     elapsed=$((elapsed + 2))
-    if [ "${elapsed}" -ge "${MAX_WAIT}" ]; then
-        echo "[batterbox-kiosk] app did not come up in ${MAX_WAIT}s — starting browser anyway"
-        break
+    if [ "${elapsed}" -ge "${MAX_WAIT}" ] && [ "${warned}" = false ]; then
+        echo "[batterbox-kiosk] app is still unavailable after ${MAX_WAIT}s — continuing to wait"
+        warned=true
     fi
 done
 echo "[batterbox-kiosk] app is up after ~${elapsed}s"

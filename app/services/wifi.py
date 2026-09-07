@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 
 from .. import db
 
@@ -29,6 +30,7 @@ DEFAULT_SSID = "BatterBox"
 DEFAULT_PASSWORD = "bigleague1"
 _CMD_TIMEOUT = 10  # seconds; nmcli answers fast or not at all
 _ENABLE_TIMEOUT = 30  # bringing up an AP (scan/channel negotiation) can take a while
+_radio_lock = threading.RLock()
 
 
 def _redact(args: list[str]) -> list[str]:
@@ -98,14 +100,16 @@ def _validate(ssid: str, password: str) -> None:
         raise ValueError("password must be printable ASCII (WPA2 rule)")
 
 
-def _active_connections() -> dict[str, str]:
-    """{connection name: device} for active connections. Defensive parsing:
-    tolerates empty output, blank lines, and ':' in names (nmcli -t escapes
-    them as '\\:'; device is always the last field)."""
+def _active_connections() -> tuple[dict[str, str] | None, str]:
+    """Return ({connection name: device}, "") or (None, error detail).
+
+    Defensive parsing tolerates empty output, blank lines, and ':' in names
+    (nmcli -t escapes them as '\\:'; device is always the last field).
+    """
     ok, out = _run(["-t", "-f", "NAME,DEVICE", "connection", "show", "--active"])
-    conns: dict[str, str] = {}
     if not ok:
-        return conns
+        return None, out or "failed to read active NetworkManager connections"
+    conns: dict[str, str] = {}
     for line in out.splitlines():
         line = line.strip()
         if not line or ":" not in line:
@@ -113,7 +117,7 @@ def _active_connections() -> dict[str, str]:
         name, device = line.rsplit(":", 1)
         if device:
             conns[name.replace("\\:", ":")] = device
-    return conns
+    return conns, ""
 
 
 def _wlan_ip() -> str | None:
@@ -147,7 +151,10 @@ def get_status() -> dict:
         status["detail"] = detail
         return status
     status["available"] = True
-    conns = _active_connections()
+    conns, active_detail = _active_connections()
+    if conns is None:
+        status["detail"] = active_detail
+        return status
     if conns.get(HOTSPOT_CON_NAME):
         status["mode"] = "hotspot"
         status["hotspot_active"] = True
@@ -172,6 +179,12 @@ def get_status() -> dict:
         return status
     status["mode"] = "offline"
     status["detail"] = f"Wi-Fi available but {IFNAME} is not connected to any network"
+    return status
+
+
+def _unknown_status(detail: str) -> dict:
+    status = get_status()
+    status.update(mode="unknown", hotspot_active=False, ip=None, detail=detail)
     return status
 
 
@@ -209,48 +222,52 @@ def enable_hotspot(ssid: str, password: str) -> tuple[dict, str | None]:
     persisted only after nmcli succeeds, so a 400 never overwrites good
     settings; if the new hotspot fails while the old one was running, the old
     hotspot is restored (best-effort) so the Pi doesn't go dark."""
-    ssid = (ssid or "").strip()
-    try:
-        _validate(ssid, password)
-    except ValueError as e:
-        return get_status(), str(e)
-    available, detail = _detect()
-    if not available:
-        return get_status(), detail
-    prev_ssid = db.get_setting("wifi_ssid", DEFAULT_SSID)
-    prev_password = db.get_setting("wifi_password", DEFAULT_PASSWORD)
-    was_active = bool(_active_connections().get(HOTSPOT_CON_NAME))
-    # Replace any previous profile so re-enabling with new credentials works.
-    ok, out = _run(["connection", "delete", "id", HOTSPOT_CON_NAME])
-    if not ok:
-        log.info("no stale '%s' connection to delete (%s)", HOTSPOT_CON_NAME, out)
-    ok, out = _create_hotspot(ssid, password)
-    if ok:
-        db.set_setting("wifi_ssid", ssid)
-        db.set_setting("wifi_password", password)
-        log.info("Wi-Fi hotspot '%s' enabled on %s", ssid, IFNAME)
+    with _radio_lock:
+        ssid = (ssid or "").strip()
+        try:
+            _validate(ssid, password)
+        except ValueError as e:
+            return get_status(), str(e)
+        available, detail = _detect()
+        if not available:
+            return get_status(), detail
+        conns, active_detail = _active_connections()
+        if conns is None:
+            return _unknown_status(active_detail), active_detail
+        prev_ssid = db.get_setting("wifi_ssid", DEFAULT_SSID)
+        prev_password = db.get_setting("wifi_password", DEFAULT_PASSWORD)
+        was_active = bool(conns.get(HOTSPOT_CON_NAME))
+        # Replace any previous profile so re-enabling with new credentials works.
+        ok, out = _run(["connection", "delete", "id", HOTSPOT_CON_NAME])
+        if not ok:
+            log.info("no stale '%s' connection to delete (%s)", HOTSPOT_CON_NAME, out)
+        ok, out = _create_hotspot(ssid, password)
+        if ok:
+            db.set_setting("wifi_ssid", ssid)
+            db.set_setting("wifi_password", password)
+            log.info("Wi-Fi hotspot '%s' enabled on %s", ssid, IFNAME)
+            status = get_status()
+            status["detail"] = (
+                f"Hotspot '{ssid}' is ON — the Pi left its previous Wi-Fi. "
+                f"Admin devices must join '{ssid}' and reopen "
+                "http://batterbox.local (or http://10.42.0.1)."
+            )
+            return status, None
+        err = f"nmcli hotspot failed: {out or 'no response from nmcli'}"
+        log.warning(err)
+        if was_active:
+            # The old profile was deleted above; recreate it from the still-stored
+            # previous credentials so admins keep a way onto the box.
+            ok2, out2 = _create_hotspot(prev_ssid, prev_password)
+            if ok2:
+                log.info("restored previous hotspot '%s' after failure", prev_ssid)
+                err += f" — previous hotspot '{prev_ssid}' restored"
+            else:
+                log.warning("failed to restore previous hotspot: %s", out2)
+                err += " — and restoring the previous hotspot failed"
         status = get_status()
-        status["detail"] = (
-            f"Hotspot '{ssid}' is ON — the Pi left its previous Wi-Fi. "
-            f"Admin devices must join '{ssid}' and reopen "
-            "http://batterbox.local (or http://10.42.0.1)."
-        )
-        return status, None
-    err = f"nmcli hotspot failed: {out or 'no response from nmcli'}"
-    log.warning(err)
-    if was_active:
-        # The old profile was deleted above; recreate it from the still-stored
-        # previous credentials so admins keep a way onto the box.
-        ok2, out2 = _create_hotspot(prev_ssid, prev_password)
-        if ok2:
-            log.info("restored previous hotspot '%s' after failure", prev_ssid)
-            err += f" — previous hotspot '{prev_ssid}' restored"
-        else:
-            log.warning("failed to restore previous hotspot: %s", out2)
-            err += " — and restoring the previous hotspot failed"
-    status = get_status()
-    status["detail"] = err
-    return status, err
+        status["detail"] = err
+        return status, err
 
 
 def connect_client(ssid: str, password: str) -> tuple[dict, str | None]:
@@ -258,82 +275,99 @@ def connect_client(ssid: str, password: str) -> tuple[dict, str | None]:
     box as the hotspot, pointed the other way). Drops the batterbox hotspot first
     if it's up — one radio can't be AP and client at once. An empty password
     means an open network (no password arg passed to nmcli)."""
-    ssid = (ssid or "").strip()
-    if not 1 <= len(ssid) <= 32:
-        return get_status(), "SSID must be 1–32 characters"
-    if password:  # empty = open network; otherwise WPA2 rules apply
-        try:
-            _validate(ssid, password)
-        except ValueError as e:
-            return get_status(), str(e)
-    available, detail = _detect()
-    if not available:
-        return get_status(), detail
-    was_hotspot = bool(_active_connections().get(HOTSPOT_CON_NAME))
-    if was_hotspot:
-        # One radio can't be AP and client at once. Down (not delete) the
-        # profile so it can be brought straight back up if the connect fails.
-        ok, out = _run(["connection", "down", "id", HOTSPOT_CON_NAME])
-        if not ok:
-            log.warning("failed to down hotspot before client connect: %s", out)
-    args = ["device", "wifi", "connect", ssid, "ifname", IFNAME]
-    if password:
-        args += ["password", password]
-    ok, out = _run(args, timeout=_ENABLE_TIMEOUT)
-    if ok:
-        # Persist only after success — a typo'd password must not overwrite
-        # the credentials of the hotspot people are actually using.
-        db.set_setting("wifi_ssid", ssid)
-        db.set_setting("wifi_password", password)
-        log.info("Wi-Fi client connected to '%s' on %s", ssid, IFNAME)
+    with _radio_lock:
+        ssid = (ssid or "").strip()
+        if not 1 <= len(ssid) <= 32:
+            return get_status(), "SSID must be 1–32 characters"
+        if password:  # empty = open network; otherwise WPA2 rules apply
+            try:
+                _validate(ssid, password)
+            except ValueError as e:
+                return get_status(), str(e)
+        available, detail = _detect()
+        if not available:
+            return get_status(), detail
+        conns, active_detail = _active_connections()
+        if conns is None:
+            return _unknown_status(active_detail), active_detail
+        was_hotspot = bool(conns.get(HOTSPOT_CON_NAME))
+        if was_hotspot:
+            # One radio can't be AP and client at once. Down (not delete) the
+            # profile so it can be brought straight back up if the connect fails.
+            ok, out = _run(["connection", "down", "id", HOTSPOT_CON_NAME])
+            if not ok:
+                log.warning("failed to down hotspot before client connect: %s", out)
+        args = ["device", "wifi", "connect", ssid, "ifname", IFNAME]
+        if password:
+            args += ["password", password]
+        ok, out = _run(args, timeout=_ENABLE_TIMEOUT)
+        if ok:
+            # Persist only after success — a typo'd password must not overwrite
+            # the credentials of the hotspot people are actually using.
+            db.set_setting("wifi_ssid", ssid)
+            db.set_setting("wifi_password", password)
+            log.info("Wi-Fi client connected to '%s' on %s", ssid, IFNAME)
+            status = get_status()
+            status["detail"] = (
+                f"Joined '{ssid}' as a client"
+                + (f" ({status['ip']})" if status["ip"] else "")
+                + f". Admin devices must be on '{ssid}' too — open http://batterbox.local."
+            )
+            return status, None
+        err = f"nmcli connect failed: {out or 'no response from nmcli'}"
+        log.warning(err)
+        if was_hotspot:
+            # Bring the hotspot back so the requesting phone can rejoin —
+            # otherwise a wrong password leaves the Pi unreachable in the field.
+            ok2, out2 = _run(
+                ["connection", "up", "id", HOTSPOT_CON_NAME],
+                timeout=_ENABLE_TIMEOUT,
+            )
+            if ok2:
+                log.info("restored hotspot after failed client connect")
+                err += " — hotspot restored, rejoin it to retry"
+            else:
+                log.warning("failed to restore hotspot: %s", out2)
+                err += " — and restoring the hotspot failed"
         status = get_status()
-        status["detail"] = (
-            f"Joined '{ssid}' as a client"
-            + (f" ({status['ip']})" if status["ip"] else "")
-            + f". Admin devices must be on '{ssid}' too — open http://batterbox.local."
-        )
-        return status, None
-    err = f"nmcli connect failed: {out or 'no response from nmcli'}"
-    log.warning(err)
-    if was_hotspot:
-        # Bring the hotspot back so the requesting phone can rejoin —
-        # otherwise a wrong password leaves the Pi unreachable in the field.
-        ok2, out2 = _run(
-            ["connection", "up", "id", HOTSPOT_CON_NAME], timeout=_ENABLE_TIMEOUT
-        )
-        if ok2:
-            log.info("restored hotspot after failed client connect")
-            err += " — hotspot restored, rejoin it to retry"
-        else:
-            log.warning("failed to restore hotspot: %s", out2)
-            err += " — and restoring the hotspot failed"
-    status = get_status()
-    status["detail"] = err
-    return status, err
+        status["detail"] = err
+        return status, err
 
 
 def disable_hotspot() -> tuple[dict, str | None]:
     """Take the hotspot down. NetworkManager rejoins any remembered client
     network (e.g. the iPhone) on its own; detail notes when none came up."""
-    available, detail = _detect()
-    if not available:
-        return get_status(), detail
-    ok, out = _run(["connection", "down", "id", HOTSPOT_CON_NAME])
-    status = get_status()
-    if status["hotspot_active"]:
-        err = f"failed to stop hotspot: {out or 'no response from nmcli'}"
-        log.warning(err)
-        status["detail"] = err
-        return status, err
-    if not ok:
-        log.info("hotspot was not active (%s)", out)
-    if status["mode"] == "client":
-        log.info("Wi-Fi hotspot off — reconnected to a client network")
-        status["detail"] = f"Hotspot off. {status['detail']}"
-    else:
-        status["detail"] = (
-            "Hotspot off. NetworkManager will rejoin any remembered Wi-Fi "
-            "network (e.g. the iPhone hotspot) on its own; if none comes up, "
-            "reconnect manually (sudo nmcli device wifi connect ...)."
-        )
-    return status, None
+    with _radio_lock:
+        available, detail = _detect()
+        if not available:
+            return get_status(), detail
+        conns, active_detail = _active_connections()
+        if conns is None:
+            return _unknown_status(active_detail), active_detail
+        ok, out = _run(["connection", "down", "id", HOTSPOT_CON_NAME])
+        status = get_status()
+        if status["mode"] == "unknown":
+            err = (
+                "could not verify hotspot stopped: "
+                f"{status['detail'] or 'unknown Wi-Fi state'}"
+            )
+            log.warning(err)
+            status["detail"] = err
+            return status, err
+        if status["hotspot_active"]:
+            err = f"failed to stop hotspot: {out or 'no response from nmcli'}"
+            log.warning(err)
+            status["detail"] = err
+            return status, err
+        if not ok:
+            log.info("hotspot was not active (%s)", out)
+        if status["mode"] == "client":
+            log.info("Wi-Fi hotspot off — reconnected to a client network")
+            status["detail"] = f"Hotspot off. {status['detail']}"
+        else:
+            status["detail"] = (
+                "Hotspot off. NetworkManager will rejoin any remembered Wi-Fi "
+                "network (e.g. the iPhone hotspot) on its own; if none comes up, "
+                "reconnect manually (sudo nmcli device wifi connect ...)."
+            )
+        return status, None

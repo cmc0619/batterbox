@@ -184,6 +184,8 @@ def _server_play(clip: dict, subdir: str = "clips") -> subprocess.Popen | None:
     ]
     audio_output = db.get_setting("audio_output", config.AUDIO_OUTPUT)
     if audio_output and audio_output != "auto":
+        if audio_output.startswith(("hw:", "plughw:")):
+            audio_output = f"alsa/{audio_output}"
         cmd.append(f"--audio-device={audio_output}")
     boost = clip.get("volume_boost_db") or 0.0
     if boost:
@@ -202,26 +204,21 @@ def _server_play(clip: dict, subdir: str = "clips") -> subprocess.Popen | None:
     return proc
 
 
-def _watch_mpv(proc: subprocess.Popen) -> None:
-    """Clear "playing" state when mpv reaches end of file on its own.
-
-    The browser backend clears state via the client's `ended` handler; the
-    server backend has no client to do that, so without this the state (and
-    every kiosk's playing indicator) would stick until the next play/stop.
-    """
+def _watch_mpv(proc: subprocess.Popen, play_id: int) -> None:
+    """Give browser listeners a moment to finish after mpv reaches EOF."""
     global _mpv_proc, _mpv_ipc
     proc.wait()
-    # Check-and-clear atomically: check-then-stop() would leave a window
-    # where a clip started in between gets killed by this watcher. proc has
-    # already exited, so there is nothing to terminate. Broadcasting under
-    # the lock keeps this stop ordered before any subsequent play event.
-    with _lock:
-        if _mpv_proc is not proc:
-            return  # replaced or stopped while we waited; not ours to clear
-        _mpv_proc = None
-        _mpv_ipc = None
-        _state.update(_idle_fields())
-        ws_manager.broadcast({"event": "stop"})
+    with _op_lock:
+        with _lock:
+            if (
+                _mpv_proc is not proc
+                or _state["status"] != "playing"
+                or _state["play_id"] != play_id
+            ):
+                return  # replaced or stopped while we waited
+            _mpv_proc = None
+            _mpv_ipc = None
+        _arm_eos_timer(play_id, EOS_GRACE_SEC)
 
 
 # --------------------------------------------------- end-of-song ownership
@@ -246,12 +243,10 @@ def _eos_fire(play_id: int) -> None:
         _halt()
 
 
-def _arm_eos_timer(play_id: int, duration_sec: float) -> None:
+def _arm_eos_timer(play_id: int, delay_sec: float) -> None:
     """Callers hold _op_lock (so this can't race the next play's _halt)."""
     global _eos_timer
-    timer = threading.Timer(
-        duration_sec + EOS_GRACE_SEC, _eos_fire, args=(play_id,)
-    )
+    timer = threading.Timer(delay_sec, _eos_fire, args=(play_id,))
     timer.daemon = True
     timer.name = "eos-timer"
     with _lock:
@@ -304,7 +299,8 @@ def stop(play_id: int | None = None) -> dict:
         if play_id is not None:
             with _lock:
                 stale = _state["status"] != "playing" or _state["play_id"] != play_id
-            if stale:
+                server_owned = _state["server_eos"] is True
+            if stale or server_owned:
                 return get_state()
         _halt()
     return get_state()
@@ -326,9 +322,9 @@ def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
                 # happening — a stuck "playing" state never clears itself.
                 return get_state()
         duration = _clip_duration(row)
-        # mpv reports its own EOF (_watch_mpv); the timer is for the browser
-        # backend, where no single client may be trusted to end the play.
-        server_eos = duration is not None and proc is None
+        # mpv reports its own EOF; browser playback uses the stored duration.
+        # Either way, no listening client may end a server-owned play.
+        server_eos = proc is not None or duration is not None
         with _lock:
             play_id = _state["play_id"] + 1
             _state.update(
@@ -362,10 +358,13 @@ def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
         )
         if proc is not None:
             threading.Thread(
-                target=_watch_mpv, args=(proc,), daemon=True, name="mpv-watcher"
+                target=_watch_mpv,
+                args=(proc, play_id),
+                daemon=True,
+                name="mpv-watcher",
             ).start()
         elif server_eos:
-            _arm_eos_timer(play_id, duration)
+            _arm_eos_timer(play_id, duration + EOS_GRACE_SEC)
     return get_state()
 
 
