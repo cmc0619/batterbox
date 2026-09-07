@@ -136,10 +136,9 @@ def init_db() -> None:
             # First boot after this tracking was added. A pre-existing DB
             # already holds a value and nothing distinguishes an admin's
             # choice from a stale first-boot env seed, so only replace it
-            # while it is still the literal default — the same "upgrade
-            # untouched defaults only" rule the snippet-length migration
-            # below uses. That fixes the stuck-at-"auto" case the sentinel
-            # exists for without discarding a deliberately chosen device.
+            # while it is still the literal default. That fixes the
+            # stuck-at-"auto" case the sentinel exists for without discarding
+            # a deliberately chosen device.
             current = conn.execute(
                 "SELECT value FROM settings WHERE key = 'audio_output'"
             ).fetchone()
@@ -221,15 +220,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.rollback()
             raise
         log.info("Migrated clips table: rebuilt with 'walkout' in the type CHECK")
-
-    # Snippet default grew 12s -> 30s; upgrade only untouched defaults.
-    cur = conn.execute(
-        "UPDATE settings SET value = '30'"
-        " WHERE key = 'default_snippet_length' AND value = '12'"
-    )
-    if cur.rowcount:
-        conn.commit()
-        log.info("Migrated settings: default_snippet_length 12 -> 30")
 
 
 def _seed_if_empty(conn: sqlite3.Connection) -> None:
