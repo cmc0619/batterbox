@@ -12,6 +12,7 @@ let activeTeamId = null;
 let selectedTeamId = null;
 let players = [];
 let openPlayerId = null;
+let playerLoadSeq = 0;
 
 /* ---------------- helpers ---------------- */
 
@@ -123,10 +124,13 @@ async function loadTeams() {
   renderTeams();
 }
 
-document.getElementById('btn-add-team').addEventListener('click', async () => {
+document.getElementById('btn-add-team').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  if (button.disabled) return;
   const input = document.getElementById('new-team-name');
   const name = input.value.trim();
   if (!name) return;
+  button.disabled = true;
   try {
     const t = await BB.api('/api/teams', { method: 'POST', body: { name } });
     input.value = '';
@@ -135,6 +139,7 @@ document.getElementById('btn-add-team').addEventListener('click', async () => {
     await loadTeams();
     await loadPlayers();
   } catch (err) { showBanner(err.message, false); }
+  finally { button.disabled = false; }
 });
 
 document.getElementById('btn-rename-team').addEventListener('click', async () => {
@@ -164,9 +169,13 @@ document.getElementById('btn-delete-team').addEventListener('click', async () =>
 /* ---------------- players ---------------- */
 
 async function loadPlayers() {
+  const teamId = selectedTeamId;
+  const seq = ++playerLoadSeq;
   listEl.textContent = '';
-  if (selectedTeamId == null) { players = []; return; }
-  players = await BB.api(`/api/teams/${selectedTeamId}/players`);
+  if (teamId == null) { players = []; return; }
+  const rows = await BB.api(`/api/teams/${teamId}/players`);
+  if (seq !== playerLoadSeq || selectedTeamId !== teamId) return;
+  players = rows;
   renderPlayers();
 }
 
@@ -362,7 +371,7 @@ function buildDetail(p) {
     try {
       await BB.api(`/api/players/${p.id}`, {
         method: 'PATCH',
-        body: { name: ni.value.trim() || p.name, jersey_number: jersey },
+        body: { name: ni.value.trim(), jersey_number: jersey },
       });
       await loadPlayers();
     } catch (err) { showBanner(err.message, false); }
@@ -584,16 +593,20 @@ document.getElementById('btn-add-hype').addEventListener('click', () => {
 
 /* ---------------- add player ---------------- */
 
-document.getElementById('btn-add-player').addEventListener('click', async () => {
+document.getElementById('btn-add-player').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  if (button.disabled) return;
   if (selectedTeamId == null) { showBanner('Create a team first.', false); return; }
+  const teamId = selectedTeamId;
   const nameIn = document.getElementById('new-player-name');
   const jerseyIn = document.getElementById('new-player-jersey');
   const name = nameIn.value.trim();
-  if (!name) return;
   const jersey = jerseyOf(jerseyIn.value);
   if (jersey === undefined) { showBanner(JERSEY_HINT, false); return; }
+  if (!name && jersey === null) { showBanner('Enter a name or jersey number.', false); return; }
+  button.disabled = true;
   try {
-    await BB.api(`/api/teams/${selectedTeamId}/players`, {
+    await BB.api(`/api/teams/${teamId}/players`, {
       method: 'POST',
       body: { name, jersey_number: jersey },
     });
@@ -601,6 +614,7 @@ document.getElementById('btn-add-player').addEventListener('click', async () => 
     jerseyIn.value = '';
     await loadPlayers();
   } catch (err) { showBanner(err.message, false); }
+  finally { button.disabled = false; }
 });
 
 /* ---------------- Bluetooth speaker pairing ---------------- */
