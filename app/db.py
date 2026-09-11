@@ -259,8 +259,9 @@ def _seed_if_empty(conn: sqlite3.Connection) -> None:
 
 
 def _last_id(cur: sqlite3.Cursor) -> int:
-    """Row id of the INSERT just executed on `cur`. sqlite3 types lastrowid
-    as Optional, but it is always set after a successful INSERT."""
+    """Row id of the INSERT just executed on `cur`."""
+    # sqlite3 types lastrowid as Optional, but it is always set after a
+    # successful INSERT; the None branch only spells out that contract.
     rid = cur.lastrowid
     if rid is None:
         raise RuntimeError("INSERT produced no rowid")
@@ -303,9 +304,15 @@ def _seed_clip(conn: sqlite3.Connection, seed_dir: Path, player_id: int, clip: d
 
 
 @overload
-def get_setting(key: str, default: str) -> str: ...
+def get_setting(key: str, default: str) -> str:
+    ...
+
+
 @overload
-def get_setting(key: str, default: None = None) -> str | None: ...
+def get_setting(key: str, default: None = None) -> str | None:
+    ...
+
+
 def get_setting(key: str, default: str | None = None) -> str | None:
     with _lock:
         row = get_conn().execute(
@@ -544,16 +551,24 @@ def create_player(team_id: int, name: str, jersey_number: int | None) -> dict:
     return player
 
 
+# One static statement per updatable column: the column name never comes from
+# the request, so there is no SQL built from strings at runtime.
+_PLAYER_UPDATE_SQL = {
+    "name": "UPDATE players SET name = ? WHERE id = ?",
+    "jersey_number": "UPDATE players SET jersey_number = ? WHERE id = ?",
+    "absent": "UPDATE players SET absent = ? WHERE id = ?",
+}
+
+
 def update_player(player_id: int, fields: dict) -> dict | None:
     """Apply a partial update; `fields` may contain 'name', 'jersey_number', 'absent'."""
-    allowed = {"name", "jersey_number", "absent"}
-    assignments = [(k, v) for k, v in fields.items() if k in allowed]
+    assignments = [
+        (_PLAYER_UPDATE_SQL[k], v) for k, v in fields.items() if k in _PLAYER_UPDATE_SQL
+    ]
     with _lock:
         conn = get_conn()
-        for key, value in assignments:
-            conn.execute(  # skipcq: BAN-B608 - `key` is from the allowlist above, value is bound
-                f"UPDATE players SET {key} = ? WHERE id = ?", (value, player_id)
-            )
+        for sql, value in assignments:
+            conn.execute(sql, (value, player_id))
         conn.commit()
     return get_player(player_id)
 

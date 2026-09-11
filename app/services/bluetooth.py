@@ -57,8 +57,8 @@ _PAIRED_RE = re.compile(r"Device\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+Pair
 def _run(args: list[str], timeout: int = _CMD_TIMEOUT) -> tuple[bool, str]:
     """Run bluetoothctl non-interactively. Never raises."""
     try:
-        proc = subprocess.run(
-            ["bluetoothctl", *args],  # skipcq: BAN-B607 - resolved via PATH inside the image
+        proc = subprocess.run(  # skipcq: BAN-B607 - resolved via PATH inside the image
+            ["bluetoothctl", *args],
             capture_output=True,
             check=False,
             text=True,
@@ -274,8 +274,8 @@ def _start_agent() -> tuple[bool, str]:
             except OSError as e:
                 return False, f"could not allocate pty for bluetoothctl: {e}"
             try:
-                proc = subprocess.Popen(  # noqa: S603 - fixed argv, no user input
-                    ["bluetoothctl"],  # skipcq: BAN-B607 - resolved via PATH inside the image
+                proc = subprocess.Popen(  # noqa: S603 - fixed argv  # skipcq: BAN-B607 - PATH inside the image
+                    ["bluetoothctl"],
                     stdin=slave,
                     stdout=slave,
                     stderr=slave,

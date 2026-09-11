@@ -348,9 +348,9 @@ def _run_youtube(job: dict) -> None:
 
 
 def _ffprobe_duration(path: str) -> float:
-    proc = subprocess.run(
+    proc = subprocess.run(  # skipcq: BAN-B607 - resolved via PATH inside the image
         [
-            "ffprobe", "-v", "error",  # skipcq: BAN-B607 - resolved via PATH inside the image
+            "ffprobe", "-v", "error",
             "-show_entries", "format=duration",
             "-of", "json", path,
         ],
@@ -362,8 +362,8 @@ def _ffprobe_duration(path: str) -> float:
 
 
 def _decode_pcm(path: str) -> array:
-    proc = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", path,  # skipcq: BAN-B607 - resolved via PATH inside the image
+    proc = subprocess.run(  # skipcq: BAN-B607 - resolved via PATH inside the image
+        ["ffmpeg", "-v", "error", "-i", path,
          "-f", "s16le", "-ac", "1", "-ar", str(PCM_RATE), "pipe:1"],
         capture_output=True, timeout=600, check=False,
     )
@@ -485,8 +485,12 @@ def _render(
         "-af", ",".join(filters),
         "-b:a", "192k", dst,
     ]
+    # `cmd` is a fixed ffmpeg argv plus paths under DATA_DIR — nothing from the
+    # request reaches the shell (there is no shell: list argv, shell=False).
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
+        proc = subprocess.run(  # nosec B603  # nosemgrep
+            cmd, capture_output=True, text=True, timeout=300, check=False
+        )
     except FileNotFoundError:
         raise RenderError("ffmpeg is not installed") from None
     if proc.returncode != 0:
