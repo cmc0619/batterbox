@@ -158,67 +158,71 @@ def _agent_send(cmd: str) -> bool:
             return False
 
 
-def _agent_reader_loop(fd: int, proc: subprocess.Popen, gen: int) -> None:
-    """Watch the agent session's output: auto-accept prompts, trust on pair.
+_AGENT_REGISTRATION_FAILED = (
+    "Default agent request failed",
+    "Failed to register agent",
+    "No agent is registered",
+)
 
-    With a NoInputNoOutput agent BlueZ does "just works" pairing and should
-    not prompt, but some stacks still ask for service authorization — answer
-    yes to any (yes/no) prompt. Devices that complete pairing get trusted so
-    they can reconnect later without the pairing window being open.
 
-    Also detects the session dying unexpectedly and closes the pairing
-    window, since a window without an agent can't accept anything.
-    """
+def _read_agent_output(fd: int) -> str | None:
+    """One blocking read from the agent pty."""
+    # "" means the read should simply be retried; None means the session is
+    # gone (EOF or a closed fd).
+    try:
+        # fd is non-blocking (so writers can never stall on it); select
+        # provides the blocking wait for the read side.
+        select.select([fd], [], [])
+        chunk = os.read(fd, 4096)
+    except BlockingIOError:
+        return ""
+    except (OSError, ValueError):
+        return None
+    if not chunk:
+        return None
+    return chunk.decode("utf-8", errors="replace")
+
+
+def _handle_agent_line(line: str, gen: int, trusted: set[str]) -> None:
+    """React to one complete line of bluetoothctl output."""
+    if not line:
+        return
+    m = _PAIRED_RE.search(line)
+    if m:
+        mac = m.group(1).upper()
+        if mac not in trusted:
+            trusted.add(mac)
+            log.info("Bluetooth device %s paired; trusting it", mac)
+            _agent_send(f"trust {mac}")
+        return
+    if "Default agent request successful" in line:
+        # default-agent only succeeds with an agent registered, so
+        # this one line confirms the whole registration sequence.
+        log.info("bluetoothctl: %s", line)
+        _set_agent_confirm(gen, ok=True)
+    elif any(marker in line for marker in _AGENT_REGISTRATION_FAILED):
+        log.warning("bluetoothctl: %s", line)
+        _set_agent_confirm(gen, ok=False)
+    elif "Agent registered" in line:
+        log.info("bluetoothctl: %s", line)
+
+
+def _answer_pending_prompt(buf: str) -> str:
+    """Auto-accept a (yes/no) prompt in the partial tail, else bound the tail."""
+    # Prompts don't end with a newline, so they sit in the partial tail.
+    if "(yes/no)" in buf:
+        log.info("Auto-accepting bluetoothctl prompt: %s", buf.strip())
+        _agent_send("yes")
+        return ""
+    if len(buf) > 4096:  # unterminated garbage; don't grow unbounded
+        return buf[-1024:]
+    return buf
+
+
+def _reap_dead_agent(proc: subprocess.Popen) -> None:
+    """Tear down a finished agent session and close the pairing window."""
+    # A window without an agent can't accept anything, so it closes with it.
     global _agent_proc, _agent_fd, _agent_reader, _pairing  # skipcq: PYL-W0603 - single-process module state by design
-    buf = ""
-    trusted: set[str] = set()
-    while True:
-        try:
-            # fd is non-blocking (so writers can never stall on it); select
-            # provides the blocking wait for the read side.
-            select.select([fd], [], [])
-            chunk = os.read(fd, 4096)
-        except BlockingIOError:
-            continue
-        except (OSError, ValueError):
-            break
-        if not chunk:
-            break
-        buf += chunk.decode("utf-8", errors="replace")
-        buf = _ANSI_RE.sub("", buf)
-        *lines, buf = buf.split("\n")
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            m = _PAIRED_RE.search(line)
-            if m:
-                mac = m.group(1).upper()
-                if mac not in trusted:
-                    trusted.add(mac)
-                    log.info("Bluetooth device %s paired; trusting it", mac)
-                    _agent_send(f"trust {mac}")
-            elif "Default agent request successful" in line:
-                # default-agent only succeeds with an agent registered, so
-                # this one line confirms the whole registration sequence.
-                log.info("bluetoothctl: %s", line)
-                _set_agent_confirm(gen, ok=True)
-            elif (
-                "Default agent request failed" in line
-                or "Failed to register agent" in line
-                or "No agent is registered" in line
-            ):
-                log.warning("bluetoothctl: %s", line)
-                _set_agent_confirm(gen, ok=False)
-            elif "Agent registered" in line:
-                log.info("bluetoothctl: %s", line)
-        # Prompts don't end with a newline, so they sit in the partial tail.
-        if "(yes/no)" in buf:
-            log.info("Auto-accepting bluetoothctl prompt: %s", buf.strip())
-            _agent_send("yes")
-            buf = ""
-        elif len(buf) > 4096:  # unterminated garbage; don't grow unbounded
-            buf = buf[-1024:]
     rc = proc.poll()
     fd_to_close = None
     was_pairing = False
@@ -256,6 +260,32 @@ def _agent_reader_loop(fd: int, proc: subprocess.Popen, gen: int) -> None:
     if was_pairing:
         _notify_listeners(False)
 
+
+def _agent_reader_loop(fd: int, proc: subprocess.Popen, gen: int) -> None:
+    """Watch the agent session's output: auto-accept prompts, trust on pair.
+
+    With a NoInputNoOutput agent BlueZ does "just works" pairing and should
+    not prompt, but some stacks still ask for service authorization — answer
+    yes to any (yes/no) prompt. Devices that complete pairing get trusted so
+    they can reconnect later without the pairing window being open.
+
+    Also detects the session dying unexpectedly and closes the pairing
+    window, since a window without an agent can't accept anything.
+    """
+    buf = ""
+    trusted: set[str] = set()
+    while True:
+        text = _read_agent_output(fd)
+        if text is None:
+            break
+        if not text:
+            continue
+        buf = _ANSI_RE.sub("", buf + text)
+        *lines, buf = buf.split("\n")
+        for line in lines:
+            _handle_agent_line(line.strip(), gen, trusted)
+        buf = _answer_pending_prompt(buf)
+    _reap_dead_agent(proc)
 
 def _start_agent() -> tuple[bool, str]:
     """Ensure the persistent agent session is running with its agent confirmed
