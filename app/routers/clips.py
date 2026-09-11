@@ -4,7 +4,7 @@ activate, delete (per docs/API.md)."""
 import asyncio
 import os
 
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 
 from .. import db
 from ..models import ClipCreate, ClipPatch, YoutubeImport
@@ -32,8 +32,12 @@ def import_youtube(body: YoutubeImport):
 
 
 @router.post("/api/clips/import/upload", status_code=202)
-async def import_upload(player_id: int, type: str, file: UploadFile = File(...)):
-    if type not in ("walkup", "homerun", "walkout"):
+async def import_upload(
+    player_id: int,
+    clip_type: str = Query(..., alias="type"),
+    file: UploadFile = File(...),
+):
+    if clip_type not in ("walkup", "homerun", "walkout"):
         raise HTTPException(400, "type must be walkup, homerun or walkout")
     if db.get_player(player_id) is None:
         raise HTTPException(404, f"player {player_id} not found")
@@ -52,7 +56,7 @@ async def import_upload(player_id: int, type: str, file: UploadFile = File(...))
         # synchronous write here stalls the event loop — every WS broadcast
         # and playback command — for the duration.
         job = await asyncio.to_thread(
-            clipper.start_upload_job, player_id, type, ext, data
+            clipper.start_upload_job, player_id, clip_type, ext, data
         )
     except clipper.JobError as e:
         raise HTTPException(429, str(e)) from e

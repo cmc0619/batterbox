@@ -250,8 +250,9 @@ def _new_job(source: str, source_url: str | None, owner: dict) -> dict:
             raise JobError(
                 f"too many imports in progress ({active}) — wait for one to finish"
             )
+        job_id = uuid.uuid4().hex[:12]
         job = {
-            "job_id": uuid.uuid4().hex[:12],
+            "job_id": job_id,
             "status": "pending",
             "detail": "",
             "source": source,
@@ -264,7 +265,7 @@ def _new_job(source: str, source_url: str | None, owner: dict) -> dict:
             "owner": owner,
             "created_mono": time.monotonic(),
         }
-        _jobs[job["job_id"]] = job
+        _jobs[job_id] = job
     return job
 
 
@@ -349,11 +350,11 @@ def _run_youtube(job: dict) -> None:
 def _ffprobe_duration(path: str) -> float:
     proc = subprocess.run(
         [
-            "ffprobe", "-v", "error",
+            "ffprobe", "-v", "error",  # skipcq: BAN-B607 - resolved via PATH inside the image
             "-show_entries", "format=duration",
             "-of", "json", path,
         ],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, check=False,
     )
     if proc.returncode != 0:
         raise RenderError(f"ffprobe failed: {proc.stderr.strip()[:300]}")
@@ -362,9 +363,9 @@ def _ffprobe_duration(path: str) -> float:
 
 def _decode_pcm(path: str) -> array:
     proc = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", path,
+        ["ffmpeg", "-v", "error", "-i", path,  # skipcq: BAN-B607 - resolved via PATH inside the image
          "-f", "s16le", "-ac", "1", "-ar", str(PCM_RATE), "pipe:1"],
-        capture_output=True, timeout=600,
+        capture_output=True, timeout=600, check=False,
     )
     if proc.returncode != 0:
         raise RenderError(f"ffmpeg decode failed: {proc.stderr.decode(errors='replace').strip()[:300]}")
@@ -400,7 +401,7 @@ def _analyze(job: dict, path: str) -> None:
         job["duration_sec"] = round(duration, 3)
         samples = _decode_pcm(path)
         job["peaks"] = _peaks(samples)
-        start = _loudest_window(samples, duration, snippet)
+        start = _loudest_window(samples, snippet)
         if start is None:
             start = 0.0  # fallback: 0 -> default_snippet_length
         job["suggested_start"] = round(start, 1)
@@ -433,7 +434,7 @@ def _peaks(samples: array) -> list[float]:
     return peaks
 
 
-def _loudest_window(samples: array, duration: float, snippet: float) -> float | None:
+def _loudest_window(samples: array, snippet: float) -> float | None:
     """Start (seconds) of the loudest `snippet`-long window, by 1s-window RMS."""
     n = len(samples)
     win = PCM_RATE  # 1 second of samples
@@ -485,7 +486,7 @@ def _render(
         "-b:a", "192k", dst,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
     except FileNotFoundError:
         raise RenderError("ffmpeg is not installed") from None
     if proc.returncode != 0:
@@ -505,8 +506,10 @@ def _source_path(source_file: str | None) -> str:
     return path
 
 
-def _edit_context(source_file: str | None, key: str, obj: dict) -> dict:
+def _edit_context(source_file: str | None, key: str, obj: dict | None) -> dict:
     """Everything the editor needs to re-open a saved clip/hype trim."""
+    if obj is None:
+        raise RenderError(f"{key} not found")
     path = _source_path(source_file)
     try:
         duration = _ffprobe_duration(path)
@@ -890,4 +893,7 @@ def create_hype(
             raise
     finally:
         db.release_source_in_use(src_name)
-    return db.get_hype(hype_id)
+    hype = db.get_hype(hype_id)
+    if hype is None:
+        raise RenderError(f"hype {hype_id} vanished right after insert")
+    return hype

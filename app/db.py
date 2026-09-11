@@ -9,6 +9,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import overload
 
 from . import config
 
@@ -70,7 +71,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 
 def get_conn() -> sqlite3.Connection:
-    global _conn
+    global _conn  # skipcq: PYL-W0603
     if _conn is None:
         os.makedirs(config.DATA_DIR, exist_ok=True)
         _conn = sqlite3.connect(
@@ -245,7 +246,7 @@ def _seed_if_empty(conn: sqlite3.Connection) -> None:
                 " VALUES (?, ?, ?, ?)",
                 (team_id, player["name"], player.get("jersey_number"), p_order),
             )
-            player_id = cur.lastrowid
+            player_id = _last_id(cur)
             for clip in player.get("clips", []):
                 _seed_clip(conn, seed_file.parent, player_id, clip)
     if first_team_id is not None:
@@ -255,6 +256,15 @@ def _seed_if_empty(conn: sqlite3.Connection) -> None:
         )
     conn.commit()
     log.info("Seeded database from %s", seed_file)
+
+
+def _last_id(cur: sqlite3.Cursor) -> int:
+    """Row id of the INSERT just executed on `cur`. sqlite3 types lastrowid
+    as Optional, but it is always set after a successful INSERT."""
+    rid = cur.lastrowid
+    if rid is None:
+        raise RuntimeError("INSERT produced no rowid")
+    return rid
 
 
 def _seed_clip(conn: sqlite3.Connection, seed_dir: Path, player_id: int, clip: dict) -> None:
@@ -292,6 +302,10 @@ def _seed_clip(conn: sqlite3.Connection, seed_dir: Path, player_id: int, clip: d
 # ---------------------------------------------------------------- settings
 
 
+@overload
+def get_setting(key: str, default: str) -> str: ...
+@overload
+def get_setting(key: str, default: None = None) -> str | None: ...
 def get_setting(key: str, default: str | None = None) -> str | None:
     with _lock:
         row = get_conn().execute(
@@ -372,9 +386,13 @@ def create_team(name: str) -> dict:
     # The only team should always be the active one — otherwise the kiosk
     # renders a grid (frontend falls back to the first team) while next-batter
     # 404s with "no active team".
+    team_id = _last_id(cur)
     if get_active_team_id() is None:
-        set_active_team_id(cur.lastrowid)
-    return get_team(cur.lastrowid)
+        set_active_team_id(team_id)
+    team = get_team(team_id)
+    if team is None:
+        raise RuntimeError(f"team {team_id} vanished right after insert")
+    return team
 
 
 def update_team(team_id: int, name: str) -> dict | None:
@@ -519,7 +537,11 @@ def create_player(team_id: int, name: str, jersey_number: int | None) -> dict:
             (team_id, name, jersey_number, nxt),
         )
         conn.commit()
-    return get_player(cur.lastrowid)
+    player_id = _last_id(cur)
+    player = get_player(player_id)
+    if player is None:
+        raise RuntimeError(f"player {player_id} vanished right after insert")
+    return player
 
 
 def update_player(player_id: int, fields: dict) -> dict | None:
@@ -529,7 +551,7 @@ def update_player(player_id: int, fields: dict) -> dict | None:
     with _lock:
         conn = get_conn()
         for key, value in assignments:
-            conn.execute(
+            conn.execute(  # skipcq: BAN-B608 - `key` is from the allowlist above, value is bound
                 f"UPDATE players SET {key} = ? WHERE id = ?", (value, player_id)
             )
         conn.commit()
@@ -679,7 +701,7 @@ def insert_clip(
             ),
         )
         conn.commit()
-        return cur.lastrowid
+        return _last_id(cur)
 
 
 def source_file_referenced(basename: str) -> bool:
@@ -927,7 +949,7 @@ def insert_hype(
             ),
         )
         conn.commit()
-        return cur.lastrowid
+        return _last_id(cur)
 
 
 def get_hype_source_file(hype_id: int) -> str | None:

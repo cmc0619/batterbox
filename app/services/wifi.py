@@ -50,8 +50,9 @@ def _run(args: list[str], timeout: int = _CMD_TIMEOUT) -> tuple[bool, str]:
     """Run nmcli non-interactively. Never raises."""
     try:
         proc = subprocess.run(
-            ["nmcli", *args],
+            ["nmcli", *args],  # skipcq: BAN-B607 - resolved via PATH inside the image
             capture_output=True,
+            check=False,
             text=True,
             timeout=timeout,
         )

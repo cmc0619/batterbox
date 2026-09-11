@@ -19,7 +19,7 @@ import threading
 try:
     import pty
 except ImportError:  # native Windows lacks termios — agent can't run there;
-    pty = None      # degrade to available=false instead of crashing app startup
+    pty = None  # type: ignore[assignment]  # degrade to available=false, don't crash startup
 
 log = logging.getLogger("batterbox.bluetooth")
 
@@ -58,8 +58,9 @@ def _run(args: list[str], timeout: int = _CMD_TIMEOUT) -> tuple[bool, str]:
     """Run bluetoothctl non-interactively. Never raises."""
     try:
         proc = subprocess.run(
-            ["bluetoothctl", *args],
+            ["bluetoothctl", *args],  # skipcq: BAN-B607 - resolved via PATH inside the image
             capture_output=True,
+            check=False,
             text=True,
             timeout=timeout,
         )
@@ -100,7 +101,7 @@ def _detect() -> tuple[bool, str]:
 def _list_devices() -> list[dict]:
     """Paired devices with current connected state. Defensive parsing."""
     ok, out = _run(["devices"])
-    devices = []
+    devices: list[dict] = []
     if not ok:
         return devices
     for line in out.splitlines():
@@ -126,7 +127,7 @@ def _set_agent_confirm(gen: int, ok: bool) -> None:
     Ignored when gen is stale — a reader thread from a torn-down session
     must not decide a newer session's handshake.
     """
-    global _agent_confirm_ok
+    global _agent_confirm_ok  # skipcq: PYL-W0603
     with _lock:
         if gen != _agent_gen:
             return
@@ -163,7 +164,7 @@ def _agent_reader_loop(fd: int, proc: subprocess.Popen, gen: int) -> None:
     Also detects the session dying unexpectedly and closes the pairing
     window, since a window without an agent can't accept anything.
     """
-    global _agent_proc, _agent_fd, _agent_reader, _pairing
+    global _agent_proc, _agent_fd, _agent_reader, _pairing  # skipcq: PYL-W0603
     buf = ""
     trusted: set[str] = set()
     while True:
@@ -254,7 +255,7 @@ def _agent_reader_loop(fd: int, proc: subprocess.Popen, gen: int) -> None:
 def _start_agent() -> tuple[bool, str]:
     """Ensure the persistent agent session is running with its agent confirmed
     registered by BlueZ. Returns (ok, detail)."""
-    global _agent_proc, _agent_fd, _agent_reader, _agent_confirm_ok, _agent_gen
+    global _agent_proc, _agent_fd, _agent_reader, _agent_confirm_ok, _agent_gen  # skipcq: PYL-W0603
     spawned = False
     with _lock:
         if _agent_proc is None or _agent_proc.poll() is not None:
@@ -274,7 +275,7 @@ def _start_agent() -> tuple[bool, str]:
                 return False, f"could not allocate pty for bluetoothctl: {e}"
             try:
                 proc = subprocess.Popen(  # noqa: S603 - fixed argv, no user input
-                    ["bluetoothctl"],
+                    ["bluetoothctl"],  # skipcq: BAN-B607 - resolved via PATH inside the image
                     stdin=slave,
                     stdout=slave,
                     stderr=slave,
@@ -332,7 +333,7 @@ def _start_agent() -> tuple[bool, str]:
 
 def _stop_agent() -> None:
     """Tear down the persistent agent session. Never raises."""
-    global _agent_proc, _agent_fd, _agent_reader
+    global _agent_proc, _agent_fd, _agent_reader  # skipcq: PYL-W0603
     with _lock:
         proc, fd, reader = _agent_proc, _agent_fd, _agent_reader
         _agent_proc = _agent_fd = _agent_reader = None
@@ -406,7 +407,7 @@ def get_status() -> dict:
 
 def _cancel_timer_locked() -> None:
     """Cancel the window-expiry timer. Caller must hold _lock."""
-    global _expire_timer
+    global _expire_timer  # skipcq: PYL-W0603
     if _expire_timer is not None:
         _expire_timer.cancel()
         _expire_timer = None
@@ -420,7 +421,7 @@ def _on_expire() -> None:
 
 def _set_pairing(active: bool) -> None:
     """Flip pairing state; on exit also tear down the agent and adapter."""
-    global _pairing
+    global _pairing  # skipcq: PYL-W0603
     with _lock:
         changed = _pairing != active
         _pairing = active
@@ -475,7 +476,7 @@ def enter_pairing(duration_sec: int = DEFAULT_PAIRING_SEC) -> tuple[dict, str | 
             status = get_status()
             status["detail"] = err
             return status, err
-    global _expire_timer, _pairing
+    global _expire_timer, _pairing  # skipcq: PYL-W0603
     with _lock:
         # The agent must still be alive when the window commits: the adapter
         # commands above block for seconds, and the session can die in that

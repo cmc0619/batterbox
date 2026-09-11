@@ -19,10 +19,10 @@ def status():
 
 @router.post("/pairing")
 def start_pairing(body: BluetoothPairingStart):
-    status, err = bluetooth.enter_pairing(body.duration_sec)
+    result, err = bluetooth.enter_pairing(body.duration_sec)
     if err:
         raise HTTPException(400, err)
-    return status
+    return result
 
 
 @router.post("/pairing/stop")
@@ -32,8 +32,8 @@ def stop_pairing():
 
 @router.post("/connect")
 def connect_device(body: BluetoothConnectRequest):
-    status, err = bluetooth.connect(body.mac)
-    if err and not status.get("available"):
+    result, err = bluetooth.connect(body.mac)
+    if err and not result.get("available"):
         raise HTTPException(400, err)
     # Connect failure of an available adapter rides back in status.detail.
-    return status
+    return result
