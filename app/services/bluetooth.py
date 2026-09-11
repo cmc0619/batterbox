@@ -23,6 +23,11 @@ except ImportError:  # native Windows lacks termios — agent can't run there;
 
 log = logging.getLogger("batterbox.bluetooth")
 
+# Resolved once at import: subprocess gets a full path instead of a PATH
+# lookup at exec time. The bare name stays as a fallback so _detect's
+# "not installed" message (and nothing worse) is what fires when it's absent.
+BLUETOOTHCTL = shutil.which("bluetoothctl") or "bluetoothctl"
+
 DEFAULT_PAIRING_SEC = 120
 _CMD_TIMEOUT = 5  # seconds; bluetoothctl answers fast or not at all
 _CONNECT_TIMEOUT = 15  # connecting to a speaker can take a few seconds
@@ -57,8 +62,8 @@ _PAIRED_RE = re.compile(r"Device\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+Pair
 def _run(args: list[str], timeout: int = _CMD_TIMEOUT) -> tuple[bool, str]:
     """Run bluetoothctl non-interactively. Never raises."""
     try:
-        proc = subprocess.run(  # skipcq: BAN-B607 - resolved via PATH inside the image
-            ["bluetoothctl", *args],
+        proc = subprocess.run(
+            [BLUETOOTHCTL, *args],
             capture_output=True,
             check=False,
             text=True,
@@ -274,8 +279,8 @@ def _start_agent() -> tuple[bool, str]:
             except OSError as e:
                 return False, f"could not allocate pty for bluetoothctl: {e}"
             try:
-                proc = subprocess.Popen(  # noqa: S603 - fixed argv  # skipcq: BAN-B607 - PATH inside the image
-                    ["bluetoothctl"],
+                proc = subprocess.Popen(  # noqa: S603 - fixed argv, no user input
+                    [BLUETOOTHCTL],
                     stdin=slave,
                     stdout=slave,
                     stderr=slave,

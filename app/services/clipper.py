@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import threading
@@ -30,6 +31,12 @@ _jobs: dict[str, dict] = {}
 # exist in evicted entries). Individual job dict field updates stay unlocked —
 # single writer per job.
 _jobs_lock = threading.Lock()
+
+# Resolved once at import: subprocess gets a full path instead of a PATH
+# lookup at exec time. The bare names stay as fallbacks so a missing binary
+# still surfaces as the FileNotFoundError -> "ffmpeg is not installed" path.
+FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+FFPROBE = shutil.which("ffprobe") or "ffprobe"
 
 PEAK_BUCKETS = 800
 PCM_RATE = 8000  # mono s16le decode rate for analysis
@@ -348,9 +355,9 @@ def _run_youtube(job: dict) -> None:
 
 
 def _ffprobe_duration(path: str) -> float:
-    proc = subprocess.run(  # skipcq: BAN-B607 - resolved via PATH inside the image
+    proc = subprocess.run(
         [
-            "ffprobe", "-v", "error",
+            FFPROBE, "-v", "error",
             "-show_entries", "format=duration",
             "-of", "json", path,
         ],
@@ -362,8 +369,8 @@ def _ffprobe_duration(path: str) -> float:
 
 
 def _decode_pcm(path: str) -> array:
-    proc = subprocess.run(  # skipcq: BAN-B607 - resolved via PATH inside the image
-        ["ffmpeg", "-v", "error", "-i", path,
+    proc = subprocess.run(
+        [FFMPEG, "-v", "error", "-i", path,
          "-f", "s16le", "-ac", "1", "-ar", str(PCM_RATE), "pipe:1"],
         capture_output=True, timeout=600, check=False,
     )
@@ -479,7 +486,7 @@ def _render(
         filters.append(f"afade=t=out:st={out_st:.3f}:d={fade_out_ms / 1000:.3f}")
     filters.append("loudnorm")  # EBU R128
     cmd = [
-        "ffmpeg", "-y", "-v", "error",
+        FFMPEG, "-y", "-v", "error",
         "-ss", f"{trim_start_sec:.3f}", "-to", f"{trim_end_sec:.3f}",
         "-i", src, "-vn",
         "-af", ",".join(filters),

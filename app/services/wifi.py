@@ -24,6 +24,11 @@ from .. import db
 
 log = logging.getLogger("batterbox.wifi")
 
+# Resolved once at import: subprocess gets a full path instead of a PATH
+# lookup at exec time. The bare name stays as a fallback so _detect's
+# "not installed" message (and nothing worse) is what fires when it's absent.
+NMCLI = shutil.which("nmcli") or "nmcli"
+
 IFNAME = "wlan0"
 HOTSPOT_CON_NAME = "batterbox"  # NetworkManager connection profile name
 DEFAULT_SSID = "BatterBox"
@@ -49,8 +54,8 @@ def _redact(args: list[str]) -> list[str]:
 def _run(args: list[str], timeout: int = _CMD_TIMEOUT) -> tuple[bool, str]:
     """Run nmcli non-interactively. Never raises."""
     try:
-        proc = subprocess.run(  # skipcq: BAN-B607 - resolved via PATH inside the image
-            ["nmcli", *args],
+        proc = subprocess.run(
+            [NMCLI, *args],
             capture_output=True,
             check=False,
             text=True,
