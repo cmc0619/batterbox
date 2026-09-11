@@ -40,7 +40,8 @@ scorners = [(sx0, sy0, ztop(sy0)), (sx0 + SW, sy0, ztop(sy0)),
 sc = [iso(*p) for p in scorners]
 mat = affine_to_quad([(0, 0), (1024, 0), (0, 600)], [sc[3], sc[2], sc[0]])
 
-img64 = base64.b64encode(open("../docs/screenshots/kiosk-grid.png", "rb").read()).decode()
+with open("../docs/screenshots/kiosk-grid.png", "rb") as png:
+    img64 = base64.b64encode(png.read()).decode()
 
 # --- jumbo arcade buttons on the slope below the screen ---
 def button(cx, cy, r, color, label):
@@ -113,5 +114,6 @@ svg = f"""<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org
 <text x="0" y="360" class="s">Wi-Fi hotspot or client · Bluetooth speaker pairing · GPIO buttons/LED on the header</text>
 </svg>"""
 
-open("../docs/enclosure/batterbox-enclosure-render.svg", "w", encoding="utf8").write(svg)
+with open("../docs/enclosure/batterbox-enclosure-render.svg", "w", encoding="utf8") as out:
+    out.write(svg)
 print("svg written")
