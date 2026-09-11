@@ -163,7 +163,7 @@ def _server_play(clip: dict, subdir: str = "clips") -> subprocess.Popen | None:
     could not start (warning already broadcast). Does NOT arm the EOF
     watcher — the caller does that after broadcasting the play event, so an
     instantly-exiting mpv can't emit its stop before the play."""
-    global _mpv_proc, _mpv_ipc  # skipcq: PYL-W0603
+    global _mpv_proc, _mpv_ipc  # skipcq: PYL-W0603 - single-process module state by design
     if shutil.which("mpv") is None:
         _warn("mpv not found; AUDIO_BACKEND=server requires mpv in the container")
         return None
@@ -208,7 +208,7 @@ def _server_play(clip: dict, subdir: str = "clips") -> subprocess.Popen | None:
 
 def _watch_mpv(proc: subprocess.Popen, play_id: int) -> None:
     """Give browser listeners a moment to finish after mpv reaches EOF."""
-    global _mpv_proc, _mpv_ipc  # skipcq: PYL-W0603
+    global _mpv_proc, _mpv_ipc  # skipcq: PYL-W0603 - single-process module state by design
     proc.wait()
     with _op_lock:
         with _lock:
@@ -247,7 +247,7 @@ def _eos_fire(play_id: int) -> None:
 
 def _arm_eos_timer(play_id: int, delay_sec: float) -> None:
     """Callers hold _op_lock (so this can't race the next play's _halt)."""
-    global _eos_timer  # skipcq: PYL-W0603
+    global _eos_timer  # skipcq: PYL-W0603 - single-process module state by design
     timer = threading.Timer(delay_sec, _eos_fire, args=(play_id,))
     timer.daemon = True
     timer.name = "eos-timer"
@@ -266,7 +266,7 @@ def _clip_duration(row: dict) -> float | None:
         duration = float(raw)
     except (TypeError, ValueError):
         return None
-    if math.isnan(duration) or duration <= 0:
+    if not math.isfinite(duration) or duration <= 0:  # NaN/inf would arm a timer that never fires
         return None
     return duration
 
@@ -276,7 +276,7 @@ def _clip_duration(row: dict) -> float | None:
 
 def _halt() -> None:
     """Tear down current playback and broadcast stop. Callers hold _op_lock."""
-    global _mpv_proc, _mpv_ipc, _eos_timer  # skipcq: PYL-W0603
+    global _mpv_proc, _mpv_ipc, _eos_timer  # skipcq: PYL-W0603 - single-process module state by design
     with _lock:
         proc = _mpv_proc
         _mpv_proc = None

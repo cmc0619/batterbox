@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 
 def get_conn() -> sqlite3.Connection:
-    global _conn  # skipcq: PYL-W0603
+    global _conn  # skipcq: PYL-W0603 - single-process module state by design
     if _conn is None:
         os.makedirs(config.DATA_DIR, exist_ok=True)
         _conn = sqlite3.connect(

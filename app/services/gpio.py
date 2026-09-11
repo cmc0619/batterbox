@@ -38,7 +38,7 @@ def _next_batter() -> None:
 def _init_bt_led() -> None:
     """Pairing-indicator LED: blinks ~2Hz while Bluetooth pairing mode is
     active, off otherwise. gpio_bt_led_pin=0 disables it."""
-    global _bt_led  # skipcq: PYL-W0603
+    global _bt_led  # skipcq: PYL-W0603 - single-process module state by design
     pin = int(db.get_setting("gpio_bt_led_pin", "26"))
     if pin == 0:
         log.info("gpio_bt_led_pin=0 — Bluetooth pairing LED disabled")
