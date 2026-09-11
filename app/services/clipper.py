@@ -7,6 +7,7 @@ dict (jobs are ephemeral — they don't need to survive a restart). All ffmpeg
 nothing here raises into the request path uncaught.
 """
 
+import functools
 import glob
 import json
 import logging
@@ -19,6 +20,7 @@ import threading
 import time
 import uuid
 from array import array
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import config, db
@@ -110,6 +112,92 @@ def _cleanup_job_files(job_id: str) -> None:
 _RENDERED_MP3_RE = re.compile(r"^(\d+)\.mp3$")
 
 
+def _is_reclaimable(path: str, now: float, startup: bool) -> bool:
+    """Age gate for the sweep. At startup nothing can be in flight, so every
+    candidate is reclaimable; at runtime only files older than
+    SWEEP_MIN_AGE_SEC are (a file that vanished mid-sweep is left alone)."""
+    if startup:
+        return True
+    try:
+        return now - os.path.getmtime(path) >= SWEEP_MIN_AGE_SEC
+    except OSError:
+        return False
+
+
+def _remove_orphan(path: str, label: str) -> int:
+    """os.remove that tolerates the file vanishing first. 1 if removed."""
+    try:
+        os.remove(path)
+    except OSError:
+        return 0
+    log.info("sweep: removed orphaned %s", label)
+    return 1
+
+
+def _render_is_orphan(
+    name: str,
+    path: str,
+    live_ids: set[int],
+    get_fn: Callable[[int], dict | None],
+    reclaimable: Callable[[str], bool],
+) -> bool:
+    """Is this clips|hype dir entry a rendered file nothing owns?"""
+    m = _RENDERED_MP3_RE.match(name)
+    if m:
+        item_id = int(m.group(1))
+        if item_id in live_ids:
+            return False
+        # The id-set snapshot predates the listdir, so a clip saved
+        # while we walk the dir (row insert, then <id>.mp3 lands)
+        # would look orphaned. Confirm against the live DB before
+        # deleting: a row present now owns the file; a row absent now
+        # can never appear later (AUTOINCREMENT ids aren't reused).
+        return get_fn(item_id) is None
+    if ".tmp." in name and name.endswith(".mp3"):
+        return reclaimable(path)
+    return False  # not ours (photos etc. live elsewhere, but be safe)
+
+
+def _sweep_rendered(
+    sub: str,
+    live_ids_fn: Callable[[], set[int]],
+    get_fn: Callable[[int], dict | None],
+    reclaimable: Callable[[str], bool],
+) -> int:
+    """Delete orphaned <id>.mp3 and stale render temps under DATA_DIR/<sub>."""
+    d = os.path.join(config.DATA_DIR, sub)
+    if not os.path.isdir(d):
+        return 0
+    live_ids = live_ids_fn()
+    removed = 0
+    for name in os.listdir(d):
+        path = os.path.join(d, name)
+        if _render_is_orphan(name, path, live_ids, get_fn, reclaimable):
+            removed += _remove_orphan(path, f"{sub}/{name}")
+    return removed
+
+
+def _sweep_sources(reclaimable: Callable[[str], bool]) -> int:
+    """Delete sources/ files no row references, no render uses and no live
+    import job could still save."""
+    src_dir = os.path.join(config.DATA_DIR, "sources")
+    if not os.path.isdir(src_dir):
+        return 0
+    with _jobs_lock:
+        live_jobs = set(_jobs)
+    removed = 0
+    for name in os.listdir(src_dir):
+        if name.split(".", 1)[0] in live_jobs:
+            continue  # import in progress or awaiting save
+        if db.source_protected(name):
+            continue  # a saved clip/hype re-edits from it, or render in flight
+        path = os.path.join(src_dir, name)
+        if not reclaimable(path):
+            continue
+        removed += _remove_orphan(path, f"sources/{name}")
+    return removed
+
+
 def sweep_orphan_media(startup: bool = False) -> None:
     """Reconcile media dirs against the DB, deleting files nothing owns:
 
@@ -127,73 +215,16 @@ def sweep_orphan_media(startup: bool = False) -> None:
 
     Runs at startup and hourly (main.py lifespan task).
     """
-    now = time.time()
-
-    def _too_young(path: str) -> bool:
-        if startup:
-            return False
-        try:
-            return now - os.path.getmtime(path) < SWEEP_MIN_AGE_SEC
-        except OSError:
-            return True  # vanished mid-sweep — nothing to do
-
+    reclaimable = functools.partial(_is_reclaimable, now=time.time(), startup=startup)
     removed = 0
     for sub, live_ids_fn, get_fn in (
         ("clips", db.all_clip_ids, db.get_clip),
         ("hype", db.all_hype_ids, db.get_hype),
     ):
-        d = os.path.join(config.DATA_DIR, sub)
-        if not os.path.isdir(d):
-            continue
-        live_ids = live_ids_fn()
-        for name in os.listdir(d):
-            path = os.path.join(d, name)
-            m = _RENDERED_MP3_RE.match(name)
-            if m:
-                item_id = int(m.group(1))
-                if item_id in live_ids:
-                    continue
-                # The id-set snapshot predates the listdir, so a clip saved
-                # while we walk the dir (row insert, then <id>.mp3 lands)
-                # would look orphaned. Confirm against the live DB before
-                # deleting: a row present now owns the file; a row absent now
-                # can never appear later (AUTOINCREMENT ids aren't reused).
-                if get_fn(item_id) is not None:
-                    continue
-            elif ".tmp." in name and name.endswith(".mp3"):
-                if _too_young(path):
-                    continue
-            else:
-                continue  # not ours (photos etc. live elsewhere, but be safe)
-            try:
-                os.remove(path)
-                removed += 1
-                log.info("sweep: removed orphaned %s/%s", sub, name)
-            except OSError:
-                pass
-
-    src_dir = os.path.join(config.DATA_DIR, "sources")
-    if os.path.isdir(src_dir):
-        with _jobs_lock:
-            live_jobs = set(_jobs)
-        for name in os.listdir(src_dir):
-            if name.split(".", 1)[0] in live_jobs:
-                continue  # import in progress or awaiting save
-            if db.source_protected(name):
-                continue  # a saved clip/hype re-edits from it, or render in flight
-            path = os.path.join(src_dir, name)
-            if _too_young(path):
-                continue
-            try:
-                os.remove(path)
-                removed += 1
-                log.info("sweep: removed orphaned sources/%s", name)
-            except OSError:
-                pass
-
+        removed += _sweep_rendered(sub, live_ids_fn, get_fn, reclaimable)
+    removed += _sweep_sources(reclaimable)
     if removed:
         log.info("orphan media sweep reclaimed %d file(s)", removed)
-
 
 def _is_foreign_key_error(e: sqlite3.IntegrityError) -> bool:
     """True only for a FOREIGN KEY violation, not CHECK / NOT NULL / UNIQUE.
