@@ -18,32 +18,32 @@ def status():
 
 @router.post("/hotspot")
 def start_hotspot(body: WifiCredentials):
-    status, err = wifi.enable_hotspot(body.ssid, body.password)
+    result, err = wifi.enable_hotspot(body.ssid, body.password)
     if err:
         raise HTTPException(400, err)
-    return status
+    return result
 
 
 @router.post("/hotspot/off")
 def stop_hotspot():
-    status, err = wifi.disable_hotspot()
-    if err and not status.get("available"):
+    result, err = wifi.disable_hotspot()
+    if err and not result.get("available"):
         raise HTTPException(400, err)
     # A failed "connection down" on an available adapter rides back in detail.
-    return status
+    return result
 
 
 @router.post("/client")
 def connect_client(body: WifiCredentials):
-    status, err = wifi.connect_client(body.ssid, body.password)
+    result, err = wifi.connect_client(body.ssid, body.password)
     if err:
         raise HTTPException(400, err)
-    return status
+    return result
 
 
 @router.post("/settings")
 def save_settings(body: WifiCredentials):
-    status, err = wifi.save_settings(body.ssid, body.password)
+    result, err = wifi.save_settings(body.ssid, body.password)
     if err:
         raise HTTPException(400, err)
-    return status
+    return result

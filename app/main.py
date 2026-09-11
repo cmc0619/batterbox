@@ -23,7 +23,7 @@ log = logging.getLogger("batterbox")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     db.init_db()
     # Reclaim files nothing owns (issue #20): orphaned renders, crashed render
     # temps, and failed-import leftovers in sources/. Once at startup

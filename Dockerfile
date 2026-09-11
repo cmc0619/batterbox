@@ -12,10 +12,15 @@ FROM python:3.12-slim
 # rfkill   — unblocking Wi-Fi/BT radios on the Pi
 # swig + build-essential — ONLY needed to pip-build lgpio (gpiozero's pin
 #            backend on Pi 4); purged in this same layer so the image stays lean
+# Unpinned on purpose: the image is built for both amd64 (dev) and arm64 (Pi)
+# from python:3.12-slim, and Debian package versions drift between the two
+# and between base-image refreshes; pinning would break one side or the other.
+# skipcq: DOK-DL3008
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ffmpeg mpv curl bluez network-manager rfkill \
-       swig build-essential
+       swig build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv
 
@@ -25,8 +30,7 @@ WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && apt-get purge -y swig build-essential \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get autoremove -y
 
 COPY app/ app/
 COPY static/ static/

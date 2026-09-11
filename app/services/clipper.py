@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import threading
@@ -30,6 +31,12 @@ _jobs: dict[str, dict] = {}
 # exist in evicted entries). Individual job dict field updates stay unlocked —
 # single writer per job.
 _jobs_lock = threading.Lock()
+
+# Resolved once at import: subprocess gets a full path instead of a PATH
+# lookup at exec time. The bare names stay as fallbacks so a missing binary
+# still surfaces as the FileNotFoundError -> "ffmpeg is not installed" path.
+FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+FFPROBE = shutil.which("ffprobe") or "ffprobe"
 
 PEAK_BUCKETS = 800
 PCM_RATE = 8000  # mono s16le decode rate for analysis
@@ -250,8 +257,9 @@ def _new_job(source: str, source_url: str | None, owner: dict) -> dict:
             raise JobError(
                 f"too many imports in progress ({active}) — wait for one to finish"
             )
+        job_id = uuid.uuid4().hex[:12]
         job = {
-            "job_id": uuid.uuid4().hex[:12],
+            "job_id": job_id,
             "status": "pending",
             "detail": "",
             "source": source,
@@ -264,7 +272,7 @@ def _new_job(source: str, source_url: str | None, owner: dict) -> dict:
             "owner": owner,
             "created_mono": time.monotonic(),
         }
-        _jobs[job["job_id"]] = job
+        _jobs[job_id] = job
     return job
 
 
@@ -349,11 +357,11 @@ def _run_youtube(job: dict) -> None:
 def _ffprobe_duration(path: str) -> float:
     proc = subprocess.run(
         [
-            "ffprobe", "-v", "error",
+            FFPROBE, "-v", "error",
             "-show_entries", "format=duration",
             "-of", "json", path,
         ],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, check=False,
     )
     if proc.returncode != 0:
         raise RenderError(f"ffprobe failed: {proc.stderr.strip()[:300]}")
@@ -362,9 +370,9 @@ def _ffprobe_duration(path: str) -> float:
 
 def _decode_pcm(path: str) -> array:
     proc = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", path,
+        [FFMPEG, "-v", "error", "-i", path,
          "-f", "s16le", "-ac", "1", "-ar", str(PCM_RATE), "pipe:1"],
-        capture_output=True, timeout=600,
+        capture_output=True, timeout=600, check=False,
     )
     if proc.returncode != 0:
         raise RenderError(f"ffmpeg decode failed: {proc.stderr.decode(errors='replace').strip()[:300]}")
@@ -400,7 +408,7 @@ def _analyze(job: dict, path: str) -> None:
         job["duration_sec"] = round(duration, 3)
         samples = _decode_pcm(path)
         job["peaks"] = _peaks(samples)
-        start = _loudest_window(samples, duration, snippet)
+        start = _loudest_window(samples, snippet)
         if start is None:
             start = 0.0  # fallback: 0 -> default_snippet_length
         job["suggested_start"] = round(start, 1)
@@ -433,7 +441,7 @@ def _peaks(samples: array) -> list[float]:
     return peaks
 
 
-def _loudest_window(samples: array, duration: float, snippet: float) -> float | None:
+def _loudest_window(samples: array, snippet: float) -> float | None:
     """Start (seconds) of the loudest `snippet`-long window, by 1s-window RMS."""
     n = len(samples)
     win = PCM_RATE  # 1 second of samples
@@ -478,14 +486,18 @@ def _render(
         filters.append(f"afade=t=out:st={out_st:.3f}:d={fade_out_ms / 1000:.3f}")
     filters.append("loudnorm")  # EBU R128
     cmd = [
-        "ffmpeg", "-y", "-v", "error",
+        FFMPEG, "-y", "-v", "error",
         "-ss", f"{trim_start_sec:.3f}", "-to", f"{trim_end_sec:.3f}",
         "-i", src, "-vn",
         "-af", ",".join(filters),
         "-b:a", "192k", dst,
     ]
+    # `cmd` is a fixed ffmpeg argv plus paths under DATA_DIR — nothing from the
+    # request reaches the shell (there is no shell: list argv, shell=False).
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no user input  # nosec B603  # nosemgrep
+            cmd, capture_output=True, text=True, timeout=300, check=False
+        )
     except FileNotFoundError:
         raise RenderError("ffmpeg is not installed") from None
     if proc.returncode != 0:
@@ -505,8 +517,10 @@ def _source_path(source_file: str | None) -> str:
     return path
 
 
-def _edit_context(source_file: str | None, key: str, obj: dict) -> dict:
+def _edit_context(source_file: str | None, key: str, obj: dict | None) -> dict:
     """Everything the editor needs to re-open a saved clip/hype trim."""
+    if obj is None:
+        raise RenderError(f"{key} not found")
     path = _source_path(source_file)
     try:
         duration = _ffprobe_duration(path)
@@ -890,4 +904,7 @@ def create_hype(
             raise
     finally:
         db.release_source_in_use(src_name)
-    return db.get_hype(hype_id)
+    hype = db.get_hype(hype_id)
+    if hype is None:
+        raise RenderError(f"hype {hype_id} vanished right after insert")
+    return hype

@@ -1,0 +1,30 @@
+version = 1
+
+# Vendored wavesurfer bundles are third-party minified ESM — not ours to lint.
+exclude_patterns = ["static/vendor/**"]
+
+[[analyzers]]
+name = "python"
+enabled = true
+dependency_file_paths = ["requirements.txt"]
+
+  [analyzers.meta]
+  runtime_version = "3.x.x"
+
+[[analyzers]]
+name = "javascript"
+enabled = true
+
+  [analyzers.meta]
+  # No-build browser SPA: every file under static/js is loaded via
+  # <script type="module"> and uses import/export.
+  module_system = "es-modules"
+  environment = ["browser"]
+
+[[analyzers]]
+name = "docker"
+enabled = true
+
+[[analyzers]]
+name = "secrets"
+enabled = true
