@@ -113,9 +113,10 @@ _RENDERED_MP3_RE = re.compile(r"^(\d+)\.mp3$")
 
 
 def _is_reclaimable(path: str, now: float, startup: bool) -> bool:
-    """Age gate for the sweep. At startup nothing can be in flight, so every
-    candidate is reclaimable; at runtime only files older than
-    SWEEP_MIN_AGE_SEC are (a file that vanished mid-sweep is left alone)."""
+    """Age gate for the sweep."""
+    # At startup nothing can be in flight, so every candidate is reclaimable;
+    # at runtime only files older than SWEEP_MIN_AGE_SEC are. A file that
+    # vanished mid-sweep is left alone.
     if startup:
         return True
     try:
@@ -178,8 +179,7 @@ def _sweep_rendered(
 
 
 def _sweep_sources(reclaimable: Callable[[str], bool]) -> int:
-    """Delete sources/ files no row references, no render uses and no live
-    import job could still save."""
+    """Delete sources/ files that no row, render or live import job needs."""
     src_dir = os.path.join(config.DATA_DIR, "sources")
     if not os.path.isdir(src_dir):
         return 0

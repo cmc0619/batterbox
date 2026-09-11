@@ -166,8 +166,9 @@ _AGENT_REGISTRATION_FAILED = (
 
 
 def _read_agent_output(fd: int) -> str | None:
-    """One blocking read from the agent pty. Returns "" when the read should
-    simply be retried, None when the session is gone (EOF, closed fd)."""
+    """One blocking read from the agent pty."""
+    # "" means the read should simply be retried; None means the session is
+    # gone (EOF or a closed fd).
     try:
         # fd is non-blocking (so writers can never stall on it); select
         # provides the blocking wait for the read side.
@@ -207,8 +208,8 @@ def _handle_agent_line(line: str, gen: int, trusted: set[str]) -> None:
 
 
 def _answer_pending_prompt(buf: str) -> str:
-    """Prompts don't end with a newline, so they sit in the partial tail.
-    Auto-accept any (yes/no) prompt; otherwise keep the tail bounded."""
+    """Auto-accept a (yes/no) prompt in the partial tail, else bound the tail."""
+    # Prompts don't end with a newline, so they sit in the partial tail.
     if "(yes/no)" in buf:
         log.info("Auto-accepting bluetoothctl prompt: %s", buf.strip())
         _agent_send("yes")
@@ -219,8 +220,8 @@ def _answer_pending_prompt(buf: str) -> str:
 
 
 def _reap_dead_agent(proc: subprocess.Popen) -> None:
-    """The agent session's output ended: tear its state down and close the
-    pairing window, since a window without an agent can't accept anything."""
+    """Tear down a finished agent session and close the pairing window."""
+    # A window without an agent can't accept anything, so it closes with it.
     global _agent_proc, _agent_fd, _agent_reader, _pairing  # skipcq: PYL-W0603 - single-process module state by design
     rc = proc.poll()
     fd_to_close = None
