@@ -495,7 +495,7 @@ def _render(
     # `cmd` is a fixed ffmpeg argv plus paths under DATA_DIR — nothing from the
     # request reaches the shell (there is no shell: list argv, shell=False).
     try:
-        proc = subprocess.run(  # nosec B603  # nosemgrep
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no user input  # nosec B603  # nosemgrep
             cmd, capture_output=True, text=True, timeout=300, check=False
         )
     except FileNotFoundError:
