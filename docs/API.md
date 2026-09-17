@@ -21,7 +21,7 @@ Server → client JSON messages. Clients never send.
 { "event": "data_changed", "scope": "teams" }
 ```
 
-`play_id` is a monotonic per-play token. Clients that report natural end-of-song echo it back (see `POST /api/playback/stop`) so a delayed `ended` from a previous clip can't stop the current one.
+`stop` is only broadcast when a play was actually halted (natural end, STOP, or being replaced by the next `play`); STOP while idle emits nothing. `play_id` is a monotonic per-play token. Clients that report natural end-of-song echo it back (see `POST /api/playback/stop`) so a delayed `ended` from a previous clip can't stop the current one.
 
 `audio_warning` on the `state` message is the most recent playback warning (or `null`), same as on `GET /api/playback/state` — so a client that connects **after** a warning was raised (kiosk reload, WS reconnect) can still surface it; the live `warning` event only reaches clients connected when it fired. A new play clears it.
 
@@ -55,7 +55,7 @@ The role is **opt-in and purely client-side**: a page is a silent controller unl
   `absent: true` hides the player from the kiosk grid and phone list and skips
   them in next-batter, but they stay in the roster (admin always lists them).
 - `POST /api/teams/{team_id}/players` `{ "name", "jersey_number" }` → player
-- `PATCH /api/players/{id}` `{ "name"?, "jersey_number"?, "absent"? }` → player
+- `PATCH /api/players/{id}` `{ "name"?, "jersey_number"?, "absent"? }` → player. An explicit `"absent": null` leaves the flag unchanged (the column is NOT NULL; it used to 500).
 
   Name validation is deliberately permissive (mid-game roster entry is fog-of-war): empty, whitespace-only, and explicit-`null` names are all accepted on create and patch — a `null` name is stored and returned as `""` (a player can be just a jersey number; this used to 500). `jersey_number` must be ≥ 0 when present (**422** otherwise); `null` clears it.
 - `DELETE /api/players/{id}` → 204 (cascades clips + files)
@@ -74,7 +74,7 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
 ```
 
 - `GET /api/players/{id}/clips` → `[clip]`
-- `POST /api/clips/import/youtube` `{ "player_id", "type", "url" }` → `{ "job_id" }` (async; single video only — playlists are not expanded; downloads are size-capped at 50MB)
+- `POST /api/clips/import/youtube` `{ "player_id", "type", "url" }` → `{ "job_id" }` (async; single video only — a playlist URL imports just its first entry, never the whole list; downloads are size-capped at 50MB and cut off after 10 minutes wall-clock)
 - `POST /api/clips/import/upload?player_id=1&type=walkup` multipart `file` (mp3/m4a, ≤50MB) → `{ "job_id" }` (async)
 
   **The job is bound to the slot it was imported for.** `player_id` + `type` are
@@ -93,7 +93,7 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
      "duration_sec": 213.4, "suggested_start": 34.0, "suggested_end": 46.0,
      "source_audio_url": "/media/sources/abc.mp3", "peaks": [0.12, ...] }`
   (`peaks`: ~800 floats 0–1 for instant waveform render; `suggested_*` = loudest default_snippet_length window, fallback 0→length).
-  **Expiry:** a `job_id` **may** be evicted ~1 hour after creation (its unsaved source file is reclaimed then). Eviction runs opportunistically on job creation and on `GET /api/jobs/{id}`, so the TTL is a lower bound, not a hard cutoff: once eviction fires, `GET /api/jobs/{expired}` → **404** and `POST /api/clips`|`/api/hype` with that id → **400** `unknown job_id`; but a job still in memory can be saved past the nominal hour (polling stops once a job is `done`, so nothing forces eviction in the meantime). Clients should stop polling on 404 and re-import. Import → trim → save takes seconds, so this only bites abandoned jobs.
+  **Expiry:** a `job_id` **may** be evicted ~1 hour after creation (its unsaved source file is reclaimed then). Eviction runs opportunistically on job creation and on `GET /api/jobs/{id}`, so the TTL is a lower bound, not a hard cutoff: once eviction fires, `GET /api/jobs/{expired}` → **404** and `POST /api/clips`|`/api/hype` with that id → **400** `unknown job_id`; a `done` job whose source file has vanished from disk (should not happen — a live job pins its source against clip deletes and the sweep) answers **400** `this import's source file is gone — re-import`; but a job still in memory can be saved past the nominal hour (polling stops once a job is `done`, so nothing forces eviction in the meantime). Clients should stop polling on 404 and re-import. Import → trim → save takes seconds, so this only bites abandoned jobs.
 - `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type). `player_id`/`type` must match the slot the job was imported for → **400** otherwise (`this import was started for player N's <type> clip, ...`). Same trim validation as PATCH (`0 ≤ trim_start_sec < trim_end_sec ≤ source duration`) → 400 on violation, checked before anything is saved. A player cascade-deleted **while the clip is being saved** (renders take seconds; the pre-render existence check can't cover them, and the row can also lose the race between its own COMMIT and the audio file being moved into place) is also **400** (`player N was deleted while the clip was rendering`) — the render is discarded and the job stays `done` with its source, so the import can be saved again for a surviving slot. Only a lost race reports 400: any other constraint failure is a real fault and surfaces as 500. Field bounds (rejected with **422**): `volume_boost_db` −24…+24 (the editor UI caps at ±12); `fade_in_ms`/`fade_out_ms` 0…60000 (the editor UI caps at 5000); all float fields reject NaN/Infinity.
 - `GET /api/clips/{id}/edit_context` →
   `{ "clip": <clip object>, "source_audio_url": "/media/sources/abc.mp3", "duration_sec": 213.4, "peaks": [0.12, ...] }`
@@ -175,4 +175,4 @@ Status object:
 
 ## GPIO / mock buttons
 
-GPIO handlers (real or mock) call the playback endpoints above — no separate code path. Mock mode keyboard map (implemented in frontend, calls REST): `Space` = stop, `ArrowUp/ArrowDown` = volume ±5, `N` = next batter. On-screen debug buttons visible when `mock_gpio` is true. Hype clips are played from the kiosk's on-screen H mode only — there is deliberately **no** mock-GPIO keyboard `H` shortcut.
+GPIO handlers (real or mock) drive the same playback service functions the endpoints above are thin wrappers over — no separate code path. Mock mode keyboard map (implemented in frontend, calls REST): `Space` = stop, `ArrowUp/ArrowDown` = volume ±5, `N` = next batter. On-screen debug buttons visible when `mock_gpio` is true. Hype clips are played from the kiosk's on-screen H mode only — there is deliberately **no** mock-GPIO keyboard `H` shortcut.

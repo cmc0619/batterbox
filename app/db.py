@@ -9,6 +9,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import overload
 
 from . import config
@@ -214,6 +215,25 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 " duration_sec, trim_start_sec, trim_end_sec, fade_in_ms,"
                 " fade_out_ms, volume_boost_db, source_file, created_at FROM clips"
             )
+            # INSERT...SELECT sets clips_new's sqlite_sequence to max(id),
+            # which is LOWER than the old table's counter whenever the
+            # newest clip had been deleted — and DROP discards the old row.
+            # Carry the old high-water mark over so ids are never reused
+            # (the orphan sweep and any client-side cache rely on that).
+            old_seq = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'clips'"
+            ).fetchone()
+            if old_seq is not None:
+                cur = conn.execute(
+                    "UPDATE sqlite_sequence SET seq = max(seq, ?)"
+                    " WHERE name = 'clips_new'",
+                    (old_seq["seq"],),
+                )
+                if cur.rowcount == 0:  # no rows copied -> no sequence row yet
+                    conn.execute(
+                        "INSERT INTO sqlite_sequence (name, seq) VALUES ('clips_new', ?)",
+                        (old_seq["seq"],),
+                    )
             conn.execute("DROP TABLE clips")
             conn.execute("ALTER TABLE clips_new RENAME TO clips")
             conn.commit()
@@ -757,13 +777,28 @@ def release_source_in_use(basename: str) -> None:
             _sources_in_use.pop(basename, None)
 
 
+# Extra "keep this source" predicates registered by other modules (clipper
+# registers its live-import-job check). db can't import clipper — clipper
+# imports db — so the hook runs the other way. Called without _lock held.
+_source_guards: list[Callable[[str], bool]] = []
+
+
+def register_source_guard(guard: Callable[[str], bool]) -> None:
+    _source_guards.append(guard)
+
+
 def source_protected(basename: str) -> bool:
-    """A source must be kept if a saved row references it OR a render is in
-    flight against it. Use this (not source_file_referenced) for any deletion
-    or eviction decision."""
+    """Must sources/<basename> be kept? The ONE check for any deletion or eviction."""
+    # Kept if a saved row references it, a render is in flight against it, OR
+    # a registered guard claims it (an import job that is done but not yet
+    # saved). Use this, not source_file_referenced: deleting a clip used to
+    # unlink a source its still-live job needed, so re-saving from that job
+    # 500'd in ffprobe.
     with _lock:
         if _sources_in_use.get(basename):
             return True
+    if any(guard(basename) for guard in _source_guards):
+        return True
     return source_file_referenced(basename)
 
 

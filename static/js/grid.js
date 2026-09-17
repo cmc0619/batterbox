@@ -37,16 +37,33 @@ function visiblePlayers() {
 
 /* ---------------- helpers ---------------- */
 
+/** True while the banner shows a roster-load message ("No teams yet", "Failed to load"). */
+let loadBannerShown = false;
+
 function showBanner(msg, sticky = true) {
   banner.textContent = msg;
   banner.classList.add('show');
+  loadBannerShown = false;
   if (bannerTimer) clearTimeout(bannerTimer);
   bannerTimer = null;
   if (!sticky) bannerTimer = setTimeout(hideBanner, 5000);
 }
 function hideBanner() {
   banner.classList.remove('show');
+  loadBannerShown = false;
   if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+}
+/**
+ * Sticky roster-load banner. Tracked separately so a successful load can
+ * clear it without clobbering an audio warning: "No teams yet" used to stay
+ * on screen after the first team was created until someone played a clip.
+ */
+function showLoadBanner(msg, sticky = true) {
+  showBanner(msg, sticky);
+  loadBannerShown = true;
+}
+function hideLoadBanner() {
+  if (loadBannerShown) hideBanner();
 }
 
 function makeAvatar(player) {
@@ -79,15 +96,19 @@ function hypeAvatar() {
 function attachPressHandlers(el, player) {
   let timer = null;
   let longFired = false;
+  /** Set by pointerdown on THIS tile; a pointerup that arrives without it (mouse dragged in from another tile) is not a tap. */
+  let armed = false;
 
   const clear = () => {
     if (timer) { clearTimeout(timer); timer = null; }
+    armed = false;
     el.classList.remove('pressed');
   };
 
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     longFired = false;
+    armed = true;
     el.classList.add('pressed'); // immediate visual feedback
     timer = setTimeout(() => {
       timer = null;
@@ -99,9 +120,10 @@ function attachPressHandlers(el, player) {
   });
   el.addEventListener('pointerup', () => {
     const wasLong = longFired;
+    const wasArmed = armed;
     clear();
     longFired = false;
-    if (wasLong) return; // suppress tap after long-press
+    if (wasLong || !wasArmed) return; // suppress tap after long-press / drag-in
     BB.playback.play(player.id, mode === 'd' ? 'walkout' : 'walkup')
       .catch((err) => showBanner(err.message, false));
   });
@@ -111,13 +133,17 @@ function attachPressHandlers(el, player) {
 }
 
 function attachHypePressHandlers(el, hype) {
-  const clear = () => el.classList.remove('pressed');
+  let armed = false;
+  const clear = () => { armed = false; el.classList.remove('pressed'); };
   el.addEventListener('pointerdown', (e) => {
     e.preventDefault();
+    armed = true;
     el.classList.add('pressed'); // immediate visual feedback
   });
   el.addEventListener('pointerup', () => {
+    const wasArmed = armed;
     clear();
+    if (!wasArmed) return; // mouse dragged in from another tile
     BB.playback.playHype(hype.id)
       .catch((err) => showBanner(err.message, false));
   });
@@ -247,7 +273,7 @@ async function loadTeams({ keepPage = false } = {}) {
     currentTeamId = null;
     players = [];
     render();
-    showBanner('No teams yet — open ADMIN to create one.');
+    showLoadBanner('No teams yet — open ADMIN to create one.');
     return;
   }
   const teamChanged = selected !== currentTeamId;
@@ -270,6 +296,7 @@ async function loadTeams({ keepPage = false } = {}) {
   players = rows.filter((p) => !p.absent);
   if (!keepPage || teamChanged) page = 0; // render() clamps a kept page if the list shrank
   render();
+  hideLoadBanner(); // roster is on screen; any "no teams"/"failed to load" is stale
 }
 
 /* ---------------- controls ---------------- */
@@ -342,7 +369,7 @@ function scheduleRosterRefresh() {
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
     loadTeams({ keepPage: true })
-      .catch((err) => showBanner(`Refresh failed: ${err.message}`, false));
+      .catch((err) => showLoadBanner(`Refresh failed: ${err.message}`, false));
   }, 300);
 }
 
@@ -361,10 +388,15 @@ BB.on('data_changed', (msg) => {
 });
 
 // Changes made while the socket was down never produced an event — refetch
-// on every reconnect. The first open is boot; the boot IIFE already loads.
+// on every reconnect. The first open is boot; the boot IIFE already loads —
+// unless that load failed (page opened before the server was up), in which
+// case the first successful open IS the reconnect and must refresh, or the
+// kiosk sits blank until someone reloads it.
 let firstOpen = true;
+let bootLoadFailed = false;
 BB.on('open', () => {
-  if (firstOpen) { firstOpen = false; return; }
+  if (firstOpen && !bootLoadFailed) { firstOpen = false; return; }
+  firstOpen = false;
   scheduleRosterRefresh();
   // Hype edits missed while offline are invisible until the operator leaves
   // and re-enters H mode, so refetch that list too when it's on screen.
@@ -379,6 +411,7 @@ BB.on('open', () => {
   try {
     await loadTeams();
   } catch (err) {
-    showBanner(`Failed to load: ${err.message}`);
+    bootLoadFailed = true;
+    showLoadBanner(`Failed to load: ${err.message}`);
   }
 })();

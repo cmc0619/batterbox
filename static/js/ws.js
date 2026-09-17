@@ -6,7 +6,6 @@ const handlers = new Map(); // event -> Set<fn>
 let ws = null;
 let reconnectDelay = 1000;
 let lastState = { status: 'idle', clip_id: null, player_id: null, type: null, volume: 80 };
-let lastWarning = null;
 
 /* ---------------- REST helper ---------------- */
 
@@ -26,7 +25,10 @@ async function api(path, { method = 'GET', body, formData } = {}) {
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) {
     const detail = (data && data.detail) ? data.detail : `HTTP ${res.status}`;
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    const err = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    /** HTTP status, so callers can tell a definitive 404 from a dropped request. */
+    err.status = res.status;
+    throw err;
   }
   return data;
 }
@@ -246,9 +248,13 @@ function handleState(msg) {
     // mid-walkup used to sit out the rest of it); the guard keeps a reconnect
     // from restarting audio this device is already playing.
     const alreadyPlaying = activePlayId === msg.play_id && !audio.paused;
+    // The server keeps a play "current" for a grace second after the audio
+    // length; a reconnect in that window must not re-seek and replay the
+    // last fraction of a clip this element has already run to the end.
+    const alreadyFinished = activePlayId === msg.play_id && audio.ended;
     const offset = Number(msg.elapsed_sec) || 0;
     const nearlyOver = msg.duration_sec && offset >= msg.duration_sec;
-    if (isPlayer && msg.audio_url && !alreadyPlaying && !nearlyOver) {
+    if (isPlayer && msg.audio_url && !alreadyPlaying && !alreadyFinished && !nearlyOver) {
       startAudio({
         playId: msg.play_id,
         audioUrl: msg.audio_url,
@@ -258,13 +264,10 @@ function handleState(msg) {
       });
     }
   }
-  if (msg.audio_warning) {
-    lastWarning = msg.audio_warning;
-    emit('warning', { message: msg.audio_warning });
-  }
+  if (msg.audio_warning) emit('warning', { message: msg.audio_warning });
 }
 
-const dispatch = { play: handlePlay, stop: handleStop, volume: handleVolume, state: handleState, warning: (m) => { lastWarning = m.message; } };
+const dispatch = { play: handlePlay, stop: handleStop, volume: handleVolume, state: handleState };
 
 function handleMessage(msg) {
   if (!msg || typeof msg.event !== 'string') return;
@@ -285,7 +288,6 @@ function connect() {
     handleMessage(msg);
   };
   ws.onclose = () => {
-    emit('close', {});
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 10000);
   };
@@ -361,13 +363,9 @@ async function initMockGPIO(container) {
 export const BB = {
   api,
   on,
-  off,
   connect,
   playback,
   initMockGPIO,
-  getState: () => ({ ...lastState }),
   isAudioPlayer: () => isPlayer,
   setAudioPlayer,
-  getVolume: () => lastState.volume ?? 80,
-  getWarning: () => lastWarning,
 };

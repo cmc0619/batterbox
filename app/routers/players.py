@@ -42,6 +42,9 @@ def update_player(player_id: int, body: PlayerUpdate):
         # Accept an explicit null name (store "" — the column is NOT NULL and
         # an unguarded null used to 500 the whole PATCH).
         fields["name"] = ""
+    if "absent" in fields and fields["absent"] is None:
+        # Same column constraint; null means "leave it alone", not "false".
+        del fields["absent"]
     player = db.update_player(player_id, fields)
     audio.notify_data_changed("players")
     return player
@@ -130,6 +133,8 @@ async def upload_photo(player_id: int, file: UploadFile = File(...)):
     old = player.get("photo_url")
     if old and os.path.basename(old) != filename:
         old_path = os.path.join(config.DATA_DIR, "photos", os.path.basename(old))
-        if os.path.exists(old_path):
+        try:
             os.remove(old_path)
+        except OSError:
+            pass  # already gone (concurrent player delete) — upload succeeded
     return {"photo_url": photo_url}
