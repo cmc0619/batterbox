@@ -788,11 +788,12 @@ def register_source_guard(guard: Callable[[str], bool]) -> None:
 
 
 def source_protected(basename: str) -> bool:
-    """A source must be kept if a saved row references it, a render is in
-    flight against it, OR a registered guard claims it (an import job that is
-    done but not yet saved). Use this (not source_file_referenced) for any
-    deletion or eviction decision. Deleting a clip used to unlink a source its
-    still-live job needed, so re-saving from that job 500'd in ffprobe."""
+    """Must sources/<basename> be kept? The ONE check for any deletion or eviction."""
+    # Kept if a saved row references it, a render is in flight against it, OR
+    # a registered guard claims it (an import job that is done but not yet
+    # saved). Use this, not source_file_referenced: deleting a clip used to
+    # unlink a source its still-live job needed, so re-saving from that job
+    # 500'd in ffprobe.
     with _lock:
         if _sources_in_use.get(basename):
             return True

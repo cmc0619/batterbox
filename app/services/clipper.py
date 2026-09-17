@@ -101,12 +101,12 @@ def _evict_stale_jobs() -> None:
 
 
 def _job_holds_source(basename: str) -> bool:
-    """A live import job still needs sources/<basename> (done, awaiting save).
-
-    Registered with db.source_protected so deleting a clip can't unlink the
-    source a job it was saved from still points at — re-saving from that job
-    (undo a delete, save the same audio under another slot) used to 500 in
-    ffprobe. The hourly sweep applied this rule already; deletes didn't."""
+    """A live import job still needs sources/<basename> (done, awaiting save)."""
+    # Registered with db.source_protected so deleting a clip can't unlink the
+    # source a job it was saved from still points at — re-saving from that
+    # job (undo a delete, save the same audio under another slot) used to
+    # 500 in ffprobe. The hourly sweep applied this rule already; deletes
+    # didn't.
     with _jobs_lock:
         job = _jobs.get(basename.split(".", 1)[0])
     # A failed import releases its leftovers itself (_cleanup_job_files runs
@@ -358,12 +358,11 @@ def start_youtube_job(player_id: int, clip_type: str, url: str) -> dict:
 
 
 def _store_upload(job: dict, ext: str, data: bytes) -> str:
-    """Write the uploaded bytes for `job`; on failure drop the job again.
-
-    The job is registered before the write so the MAX_ACTIVE_JOBS check is
-    atomic; a failed write (SD card full) used to leave a workerless
-    `pending` entry counting against that ceiling for JOB_TTL_SEC — eight of
-    them made every import 429 for an hour."""
+    """Write the uploaded bytes for `job`; on failure drop the job again."""
+    # The job is registered before the write so the MAX_ACTIVE_JOBS check is
+    # atomic; a failed write (SD card full) used to leave a workerless
+    # `pending` entry counting against that ceiling for JOB_TTL_SEC — eight
+    # of them made every import 429 for an hour.
     path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ext)
     try:
         with open(path, "wb") as f:

@@ -284,11 +284,10 @@ def _clip_duration(row: dict) -> float | None:
 
 
 def _halt() -> None:
-    """Tear down current playback; broadcast stop if something was playing.
-
-    Callers hold _op_lock. The broadcast used to be unconditional, so every
-    play from idle was preceded by a phantom `stop` and STOP-while-idle
-    emitted one too."""
+    """Tear down current playback; broadcast stop if something was playing."""
+    # Callers hold _op_lock. The broadcast used to be unconditional, so every
+    # play from idle was preceded by a phantom `stop` and STOP-while-idle
+    # emitted one too.
     global _mpv_proc, _mpv_ipc, _eos_timer  # skipcq: PYL-W0603 - single-process module state by design
     with _lock:
         was_playing = _state["status"] == "playing"
@@ -394,12 +393,11 @@ def _start_locked(row: dict, subdir: str, player_id: int | None, ctype: str) -> 
 
 
 def shutdown() -> None:
-    """Lifespan teardown: stop mpv and detach from the dying event loop.
-
-    Without this a uvicorn --reload or crash-restart left mpv playing over
-    the PA with no process tracking it (the new process's STOP couldn't reach
-    it), and an in-flight EOS timer thread called run_coroutine_threadsafe on
-    a closed loop."""
+    """Lifespan teardown: stop mpv and detach from the dying event loop."""
+    # Without this a uvicorn --reload or crash-restart left mpv playing over
+    # the PA with no process tracking it (the new process's STOP couldn't
+    # reach it), and an in-flight EOS timer thread called
+    # run_coroutine_threadsafe on a closed loop.
     with _op_lock:
         _halt()
     ws_manager.loop = None
