@@ -47,6 +47,10 @@ async def lifespan(_app: FastAPI):
         await sweep_task  # confirm teardown (waits out a mid-flight sweep)
     except asyncio.CancelledError:
         pass
+    # Stop mpv and detach broadcasts from this loop BEFORE it closes: a
+    # restart otherwise orphans a playing mpv and any pending EOS timer
+    # thread tracebacks on the dead loop.
+    audio.shutdown()
 
 
 async def _sweep_loop() -> None:
@@ -130,8 +134,13 @@ async def websocket_endpoint(websocket: WebSocket):
     # moment it fired.
     await websocket.send_text(json.dumps({"event": "state", **state}))
     try:
-        while True:  # clients never send; this just holds the socket open
-            await websocket.receive_text()
+        # Clients never send; this just holds the socket open. Raw receive()
+        # rather than receive_text(): a stray binary frame made the latter
+        # raise KeyError out of the endpoint (traceback + dropped socket).
+        while True:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:

@@ -96,7 +96,9 @@ document.getElementById('config-team-select').addEventListener('change', async (
   selectedTeamId = Number(e.target.value);
   openPlayerId = null;
   renderTeams();
-  await loadPlayers();
+  // loadPlayers() clears the list before it fetches; a dropped request
+  // (server restart, Wi-Fi blip) used to leave it empty with no message.
+  try { await loadPlayers(); } catch (err) { showBanner(err.message, false); }
 });
 
 document.getElementById('active-team-select').addEventListener('change', async (e) => {

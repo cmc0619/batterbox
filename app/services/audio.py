@@ -209,7 +209,7 @@ def _server_play(clip: dict, subdir: str = "clips") -> subprocess.Popen | None:
 def _watch_mpv(proc: subprocess.Popen, play_id: int) -> None:
     """Give browser listeners a moment to finish after mpv reaches EOF."""
     global _mpv_proc, _mpv_ipc  # skipcq: PYL-W0603 - single-process module state by design
-    proc.wait()
+    rc = proc.wait()
     with _op_lock:
         with _lock:
             if (
@@ -220,6 +220,15 @@ def _watch_mpv(proc: subprocess.Popen, play_id: int) -> None:
                 return  # replaced or stopped while we waited
             _mpv_proc = None
             _mpv_ipc = None
+        if rc != 0:
+            # mpv started but bailed on its own (audio device busy/missing,
+            # unreadable file). Without this the play was broadcast, the tile
+            # pulsed for a second and state went idle with no sound and no
+            # warning — indistinguishable from a normal 1s clip.
+            _warn(
+                f"mpv exited with status {rc} before the clip finished "
+                "(audio device busy or missing?)"
+            )
         _arm_eos_timer(play_id, EOS_GRACE_SEC)
 
 
@@ -275,9 +284,14 @@ def _clip_duration(row: dict) -> float | None:
 
 
 def _halt() -> None:
-    """Tear down current playback and broadcast stop. Callers hold _op_lock."""
+    """Tear down current playback; broadcast stop if something was playing.
+
+    Callers hold _op_lock. The broadcast used to be unconditional, so every
+    play from idle was preceded by a phantom `stop` and STOP-while-idle
+    emitted one too."""
     global _mpv_proc, _mpv_ipc, _eos_timer  # skipcq: PYL-W0603 - single-process module state by design
     with _lock:
+        was_playing = _state["status"] == "playing"
         proc = _mpv_proc
         _mpv_proc = None
         _mpv_ipc = None
@@ -291,7 +305,8 @@ def _halt() -> None:
             proc.terminate()
         except Exception:  # noqa: BLE001
             pass
-    ws_manager.broadcast({"event": "stop"})
+    if was_playing:
+        ws_manager.broadcast({"event": "stop"})
 
 
 def stop(play_id: int | None = None) -> dict:
@@ -317,60 +332,77 @@ def _start(row: dict, subdir: str, player_id: int | None, ctype: str) -> dict:
     Without _op_lock two overlapping plays can interleave and orphan an mpv
     process that STOP can no longer reach."""
     with _op_lock:
-        _halt()
-        proc = None
-        if config.AUDIO_BACKEND == "server":
-            proc = _server_play(row, subdir)
-            if proc is None:
-                # mpv could not start: stay idle honestly (warning already
-                # broadcast) instead of reporting a playback that isn't
-                # happening — a stuck "playing" state never clears itself.
-                return get_state()
-        duration = _clip_duration(row)
-        # mpv reports its own EOF; browser playback uses the stored duration.
-        # Either way, no listening client may end a server-owned play.
-        server_eos = proc is not None or duration is not None
-        with _lock:
-            play_id = _state["play_id"] + 1
-            _state.update(
-                status="playing",
-                clip_id=row["id"],
-                player_id=player_id,
-                type=ctype,
-                play_id=play_id,
-                audio_warning=None,
-                audio_url=row["audio_url"],
-                volume_boost_db=row["volume_boost_db"] or 0.0,
-                duration_sec=duration,
-                server_eos=server_eos,
-                _started_at=time.monotonic(),
-            )
-        ws_manager.broadcast(
-            {
-                "event": "play",
-                "clip_id": row["id"],
-                "player_id": player_id,
-                "type": ctype,
-                "play_id": play_id,
-                "audio_url": row["audio_url"],
-                "volume": int(db.get_setting("master_volume", "80")),
-                "volume_boost_db": row["volume_boost_db"] or 0.0,
-                # False = no server-side end detection for this play, so a
-                # player-role client must still report `ended` (legacy rows
-                # with no duration).
-                "server_eos": server_eos,
-            }
-        )
-        if proc is not None:
-            threading.Thread(
-                target=_watch_mpv,
-                args=(proc, play_id),
-                daemon=True,
-                name="mpv-watcher",
-            ).start()
-        elif duration is not None:  # server_eos without mpv == stored duration
-            _arm_eos_timer(play_id, duration + EOS_GRACE_SEC)
+        _start_locked(row, subdir, player_id, ctype)
     return get_state()
+
+
+def _start_locked(row: dict, subdir: str, player_id: int | None, ctype: str) -> None:
+    """The play transition itself. Callers hold _op_lock."""
+    _halt()
+    proc = None
+    if config.AUDIO_BACKEND == "server":
+        proc = _server_play(row, subdir)
+        if proc is None:
+            # mpv could not start: stay idle honestly (warning already
+            # broadcast) instead of reporting a playback that isn't
+            # happening — a stuck "playing" state never clears itself.
+            return
+    duration = _clip_duration(row)
+    # mpv reports its own EOF; browser playback uses the stored duration.
+    # Either way, no listening client may end a server-owned play.
+    server_eos = proc is not None or duration is not None
+    with _lock:
+        play_id = _state["play_id"] + 1
+        _state.update(
+            status="playing",
+            clip_id=row["id"],
+            player_id=player_id,
+            type=ctype,
+            play_id=play_id,
+            audio_warning=None,
+            audio_url=row["audio_url"],
+            volume_boost_db=row["volume_boost_db"] or 0.0,
+            duration_sec=duration,
+            server_eos=server_eos,
+            _started_at=time.monotonic(),
+        )
+    ws_manager.broadcast(
+        {
+            "event": "play",
+            "clip_id": row["id"],
+            "player_id": player_id,
+            "type": ctype,
+            "play_id": play_id,
+            "audio_url": row["audio_url"],
+            "volume": int(db.get_setting("master_volume", "80")),
+            "volume_boost_db": row["volume_boost_db"] or 0.0,
+            # False = no server-side end detection for this play, so a
+            # player-role client must still report `ended` (legacy rows
+            # with no duration).
+            "server_eos": server_eos,
+        }
+    )
+    if proc is not None:
+        threading.Thread(
+            target=_watch_mpv,
+            args=(proc, play_id),
+            daemon=True,
+            name="mpv-watcher",
+        ).start()
+    elif duration is not None:  # server_eos without mpv == stored duration
+        _arm_eos_timer(play_id, duration + EOS_GRACE_SEC)
+
+
+def shutdown() -> None:
+    """Lifespan teardown: stop mpv and detach from the dying event loop.
+
+    Without this a uvicorn --reload or crash-restart left mpv playing over
+    the PA with no process tracking it (the new process's STOP couldn't reach
+    it), and an in-flight EOS timer thread called run_coroutine_threadsafe on
+    a closed loop."""
+    with _op_lock:
+        _halt()
+    ws_manager.loop = None
 
 
 def _play_clip_row(clip: dict) -> dict:
@@ -428,14 +460,25 @@ def play_next() -> tuple[dict | None, str | None]:
     if not candidates:
         return None, "no players with an active walkup clip"
     order = [p["id"] for p in players]
-    with _lock:
-        current = _state["player_id"] if _state["status"] == "playing" else None
-    if current in order:
-        idx = order.index(current)
-        scan = order[idx + 1 :] + order[: idx + 1]  # wraps around
-    else:
-        scan = order
-    for pid in scan:
-        if pid in candidates:
-            return play(pid, "walkup"), None
-    return None, "no players with an active walkup clip"
+    # Pick AND start under _op_lock: two NEXTs a few ms apart (REST from a
+    # phone while the GPIO button fires) used to read the same "current"
+    # player and both start the same successor, the second restarting it.
+    with _op_lock:
+        with _lock:
+            current = _state["player_id"] if _state["status"] == "playing" else None
+        if current in order:
+            idx = order.index(current)
+            scan = order[idx + 1 :] + order[: idx + 1]  # wraps around
+        else:
+            scan = order
+        for pid in scan:
+            if pid not in candidates:
+                continue
+            clip = db.get_active_clip(pid, "walkup")
+            if clip is None:
+                continue  # deactivated since list_players; keep scanning
+            _start_locked(clip, "clips", clip["player_id"], clip["type"])
+            break
+        else:
+            return None, "no players with an active walkup clip"
+    return get_state(), None

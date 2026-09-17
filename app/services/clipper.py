@@ -64,6 +64,12 @@ MAX_ACTIVE_JOBS = 8
 # source file stays on disk for clips that already reference it.
 JOB_TTL_SEC = 60 * 60
 
+# Hard wall-clock ceiling on one yt-dlp download. socket_timeout only bounds a
+# single socket operation, so a slow-but-alive stream (or a playlist that kept
+# yielding entries) could hold a worker for hours; the progress hook aborts
+# past this.
+YT_DLP_MAX_SEC = 10 * 60
+
 # Runtime sweep age gate: never touch files younger than this — an in-flight
 # render temp or a just-started download could look orphaned for a moment.
 # Renders time out at 300s and abandoned jobs evict after JOB_TTL_SEC, so an
@@ -92,6 +98,23 @@ def _evict_stale_jobs() -> None:
             pass
     if stale:
         log.info("evicted %d stale import job(s)", len(stale))
+
+
+def _job_holds_source(basename: str) -> bool:
+    """A live import job still needs sources/<basename> (done, awaiting save).
+
+    Registered with db.source_protected so deleting a clip can't unlink the
+    source a job it was saved from still points at — re-saving from that job
+    (undo a delete, save the same audio under another slot) used to 500 in
+    ffprobe. The hourly sweep applied this rule already; deletes didn't."""
+    with _jobs_lock:
+        job = _jobs.get(basename.split(".", 1)[0])
+    # A failed import releases its leftovers itself (_cleanup_job_files runs
+    # after status=error), so an errored job must not hold them.
+    return job is not None and job["status"] != "error"
+
+
+db.register_source_guard(_job_holds_source)
 
 
 def _cleanup_job_files(job_id: str) -> None:
@@ -198,6 +221,24 @@ def _sweep_sources(reclaimable: Callable[[str], bool]) -> int:
     return removed
 
 
+_PHOTO_TMP_RE = re.compile(r"^player_\d+\.[a-z0-9]+\.[0-9a-f]{8}\.tmp$")
+
+
+def _sweep_photo_temps(reclaimable: Callable[[str], bool]) -> int:
+    """Delete photo upload temps (crash between write and os.replace)."""
+    # photos/ is otherwise unswept: nothing else names files there, so only
+    # our own temp pattern is touched.
+    d = os.path.join(config.DATA_DIR, "photos")
+    if not os.path.isdir(d):
+        return 0
+    removed = 0
+    for name in os.listdir(d):
+        path = os.path.join(d, name)
+        if _PHOTO_TMP_RE.match(name) and reclaimable(path):
+            removed += _remove_orphan(path, f"photos/{name}")
+    return removed
+
+
 def sweep_orphan_media(startup: bool = False) -> None:
     """Reconcile media dirs against the DB, deleting files nothing owns:
 
@@ -212,6 +253,8 @@ def sweep_orphan_media(startup: bool = False) -> None:
       Age-gated at runtime (a mid-download .part belongs to a live job, but
       belt and suspenders); at startup jobs never survive the restart, so
       every unreferenced source is reclaimable immediately.
+    - photos/player_<id>.<ext>.<hex>.tmp upload temps (crash mid-write).
+      Same age gating as render temps.
 
     Runs at startup and hourly (main.py lifespan task).
     """
@@ -223,6 +266,7 @@ def sweep_orphan_media(startup: bool = False) -> None:
     ):
         removed += _sweep_rendered(sub, live_ids_fn, get_fn, reclaimable)
     removed += _sweep_sources(reclaimable)
+    removed += _sweep_photo_temps(reclaimable)
     if removed:
         log.info("orphan media sweep reclaimed %d file(s)", removed)
 
@@ -313,11 +357,28 @@ def start_youtube_job(player_id: int, clip_type: str, url: str) -> dict:
     return job
 
 
+def _store_upload(job: dict, ext: str, data: bytes) -> str:
+    """Write the uploaded bytes for `job`; on failure drop the job again.
+
+    The job is registered before the write so the MAX_ACTIVE_JOBS check is
+    atomic; a failed write (SD card full) used to leave a workerless
+    `pending` entry counting against that ceiling for JOB_TTL_SEC — eight of
+    them made every import 429 for an hour."""
+    path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ext)
+    try:
+        with open(path, "wb") as f:
+            f.write(data)
+    except OSError:
+        with _jobs_lock:
+            _jobs.pop(job["job_id"], None)
+        _cleanup_job_files(job["job_id"])
+        raise
+    return path
+
+
 def start_upload_job(player_id: int, clip_type: str, ext: str, data: bytes) -> dict:
     job = _new_job("upload", None, _clip_owner(player_id, clip_type))
-    path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ext)
-    with open(path, "wb") as f:
-        f.write(data)
+    path = _store_upload(job, ext, data)
     _executor.submit(_analyze, job, path)
     return job
 
@@ -334,9 +395,7 @@ def start_hype_youtube_job(url: str) -> dict:
 
 def start_hype_upload_job(ext: str, data: bytes) -> dict:
     job = _new_job("upload", None, _hype_owner())
-    path = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ext)
-    with open(path, "wb") as f:
-        f.write(data)
+    path = _store_upload(job, ext, data)
     _executor.submit(_analyze, job, path)
     return job
 
@@ -353,17 +412,31 @@ def _run_youtube(job: dict) -> None:
         job["detail"] = "yt-dlp is not installed"
         return
     out_tmpl = os.path.join(config.DATA_DIR, "sources", job["job_id"] + ".%(ext)s")
+    started = time.monotonic()
+
+    def _deadline(_status: dict) -> None:
+        # Progress hook: fires per chunk, so this is the only place a stuck
+        # or endless download can be cut off from inside the worker.
+        if time.monotonic() - started > YT_DLP_MAX_SEC:
+            raise yt_dlp.utils.DownloadCancelled(
+                f"download exceeded {YT_DLP_MAX_SEC // 60} min"
+            )
+
     opts = {
         "format": "bestaudio/best",
         "outtmpl": out_tmpl,
         "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
         "quiet": True,
         "no_warnings": True,
-        # A playlist URL would otherwise download every entry; one import =
-        # one video. Size/timeouts bound accidental monster downloads.
+        # One import = one video. `noplaylist` only applies to a URL that
+        # names BOTH a video and a list; a bare playlist URL ignores it and
+        # would download every entry into the same job. `playlist_items`
+        # caps that at the first entry. Size/timeouts bound monster downloads.
         "noplaylist": True,
+        "playlist_items": "1",
         "max_filesize": MAX_UPLOAD_BYTES,
         "socket_timeout": 30,
+        "progress_hooks": [_deadline],
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -774,7 +847,12 @@ def _done_job_source(job_id: str) -> tuple[dict, str]:
         raise JobError("unknown job_id")
     if job["status"] != "done":
         raise JobError(f"job is not done (status={job['status']}: {job.get('detail', '')})")
-    return job, job["source_path"]
+    src = job["source_path"]
+    if not os.path.exists(src):
+        # Belt and braces behind the source guard: a 400 with a clear message
+        # beats a 500 out of ffprobe if the file went missing anyway.
+        raise JobError("this import's source file is gone — re-import")
+    return job, src
 
 
 def _require_clip_job(job: dict, player_id: int, clip_type: str) -> None:

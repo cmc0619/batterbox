@@ -120,15 +120,19 @@ function pollJob() {
       job = await BB.api(`/api/jobs/${jobId}`);
       pollFailures = 0;
     } catch (err) {
-      // One dropped request on flaky dugout Wi-Fi must not kill the poll
-      // (and leave the import buttons disabled forever).
+      // A 404 is definitive — the job was evicted (API.md: stop polling and
+      // re-import). Anything else may be one dropped request on flaky
+      // dugout Wi-Fi and must not kill the poll (and leave the import
+      // buttons disabled forever).
       pollFailures += 1;
-      if (pollFailures < MAX_POLL_FAILURES) {
+      if (err.status !== 404 && pollFailures < MAX_POLL_FAILURES) {
         setJobStatus(`Job poll hiccup (retry ${pollFailures}/${MAX_POLL_FAILURES})…`);
         pollJob();
         return;
       }
-      setJobStatus(`Job poll failed: ${err.message}`, true);
+      setJobStatus(err.status === 404
+        ? 'Import expired on the server — re-import to continue.'
+        : `Job poll failed: ${err.message}`, true);
       setImportBusy(false);
       return;
     }
