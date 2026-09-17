@@ -176,6 +176,14 @@ function startAudio({ playId = null, audioUrl, volume, boostDb, offset = 0 }) {
   }
   activePlayId = playId;
   audio.src = audioUrl;
+  // A re-render (PATCH /api/clips|hype) rewrites the file under the SAME
+  // URL, and Chromium does not re-run the media load when `src` is assigned
+  // a string equal to the one it already holds — the kiosk kept playing the
+  // old bytes (old length, old trim) until the page was reloaded, while the
+  // server's EOS timer ran on the new duration. load() forces a fresh fetch;
+  // the server sends Cache-Control: no-cache on /media, so an unchanged clip
+  // costs one small conditional request per play on the LAN.
+  audio.load();
   const isCurrent = () => (
     generation === playbackGeneration
     && isPlayer
