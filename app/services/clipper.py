@@ -703,6 +703,11 @@ def _validate_trim(
             f"trim_end_sec exceeds source duration ({src_duration:.3f}s)"
         )
     trim_end_sec = min(trim_end_sec, src_duration)
+    if trim_end_sec <= trim_start_sec:
+        # A start inside the slack window (10.0005 on a 10.0s source) passed
+        # the ordering check above but the clamp just emptied the interval;
+        # ffmpeg would fail on it -> 500 instead of the documented 400.
+        raise JobError("trim_end_sec must be greater than trim_start_sec")
     return round(trim_end_sec - trim_start_sec, 3), trim_end_sec
 
 
