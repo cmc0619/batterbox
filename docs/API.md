@@ -11,15 +11,17 @@ This is the **binding contract** between backend and frontend. Both sides MUST i
 Server → client JSON messages. Clients never send.
 
 ```json
-{ "event": "play",    "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 12, "audio_url": "/media/clips/3.mp3", "volume": 80, "volume_boost_db": 0.0, "server_eos": true }
-{ "event": "play",    "clip_id": 2, "player_id": null, "type": "hype", "play_id": 13, "audio_url": "/media/hype/2.mp3", "volume": 80, "volume_boost_db": 0.0, "server_eos": true }
+{ "event": "play",    "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 12, "audio_url": "/media/clips/3.mp3?v=1789771569610049628", "volume": 80, "volume_boost_db": 0.0, "server_eos": true }
+{ "event": "play",    "clip_id": 2, "player_id": null, "type": "hype", "play_id": 13, "audio_url": "/media/hype/2.mp3?v=1789771569610450423", "volume": 80, "volume_boost_db": 0.0, "server_eos": true }
 { "event": "stop" }
 { "event": "volume",  "volume": 65 }
 { "event": "warning", "message": "No audio output device found" }
 { "event": "state",   "status": "idle", "clip_id": null, "player_id": null, "type": null, "play_id": 13, "volume": 80, "audio_warning": null, "audio_url": null, "volume_boost_db": null, "duration_sec": null, "elapsed_sec": null, "server_eos": null }
-{ "event": "state",   "status": "playing", "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 14, "volume": 80, "audio_warning": null, "audio_url": "/media/clips/3.mp3", "volume_boost_db": 0.0, "duration_sec": 12.0, "elapsed_sec": 4.13, "server_eos": true }
+{ "event": "state",   "status": "playing", "clip_id": 3, "player_id": 7, "type": "walkup", "play_id": 14, "volume": 80, "audio_warning": null, "audio_url": "/media/clips/3.mp3?v=1789771569610049628", "volume_boost_db": 0.0, "duration_sec": 12.0, "elapsed_sec": 4.13, "server_eos": true }
 { "event": "data_changed", "scope": "teams" }
 ```
+
+`audio_url` on `play`/`state` is the clip's `audio_url` exactly as the clip object carries it — including its opaque cache-busting `?v=` query (see Clips). Clients must set the media element's source to the string **verbatim** (never strip or rewrite the query): a re-trim rewrites `<id>.mp3` in place under the same path, and a browser that already loaded that path will keep playing the old bytes without making any request — `Cache-Control: no-cache` cannot help because nothing is fetched. A changed `v` is the only thing that makes the player refetch.
 
 `stop` is only broadcast when a play was actually halted (natural end, STOP, or being replaced by the next `play`); STOP while idle emits nothing. `play_id` is a monotonic per-play token. Clients that report natural end-of-song echo it back (see `POST /api/playback/stop`) so a delayed `ended` from a previous clip can't stop the current one.
 
@@ -68,10 +70,12 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
 `walkout` = pitcher entrance/walk-out):
 ```json
 { "id", "player_id", "type": "walkup"|"homerun"|"walkout", "is_active": true,
-  "source": "youtube"|"upload", "source_url": "...", "audio_url": "/media/clips/12.mp3",
+  "source": "youtube"|"upload", "source_url": "...", "audio_url": "/media/clips/12.mp3?v=1789771569610049628",
   "duration_sec": 12.0, "trim_start_sec": 34.5, "trim_end_sec": 46.5,
   "fade_in_ms": 300, "fade_out_ms": 500, "volume_boost_db": 0.0, "created_at": "iso" }
 ```
+
+`audio_url` carries an **opaque cache-busting `?v=` query** that changes whenever the rendered file changes (it is derived from the file's mtime; the value has no meaning beyond "different = refetch"). `PATCH` re-renders `<id>.mp3` **in place** under a fixed path, and browsers (Chromium's media cache in particular) reuse an already-loaded media resource for the same URL without making any request — so the URL itself must change for a re-trimmed clip to be heard. Clients must use the string verbatim as the media source and compare/store it as given; never strip the query or rebuild the URL from `id`. The same `audio_url` string is what the WS `play`/`state` messages and `GET /api/playback/state` carry. If the rendered file is missing (it is normally present) the URL is emitted without a query. `source_audio_url` (below) has no `?v=` — sources are immutable per job.
 
 - `GET /api/players/{id}/clips` → `[clip]`
 - `POST /api/clips/import/youtube` `{ "player_id", "type", "url" }` → `{ "job_id" }` (async; single video only — a playlist URL imports just its first entry, never the whole list; downloads are size-capped at 50MB and cut off after 10 minutes wall-clock)
@@ -94,25 +98,25 @@ Clip object (`type`: `walkup` = batter walk-up, `homerun` = home-run celebration
      "source_audio_url": "/media/sources/abc.mp3", "peaks": [0.12, ...] }`
   (`peaks`: ~800 floats 0–1 for instant waveform render; `suggested_*` = loudest default_snippet_length window, fallback 0→length).
   **Expiry:** a `job_id` **may** be evicted ~1 hour after creation (its unsaved source file is reclaimed then). Eviction runs opportunistically on job creation and on `GET /api/jobs/{id}`, so the TTL is a lower bound, not a hard cutoff: once eviction fires, `GET /api/jobs/{expired}` → **404** and `POST /api/clips`|`/api/hype` with that id → **400** `unknown job_id`; a `done` job whose source file has vanished from disk (should not happen — a live job pins its source against clip deletes and the sweep) answers **400** `this import's source file is gone — re-import`; but a job still in memory can be saved past the nominal hour (polling stops once a job is `done`, so nothing forces eviction in the meantime). Clients should stop polling on 404 and re-import. Import → trim → save takes seconds, so this only bites abandoned jobs.
-- `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type). `player_id`/`type` must match the slot the job was imported for → **400** otherwise (`this import was started for player N's <type> clip, ...`). Same trim validation as PATCH (`0 ≤ trim_start_sec < trim_end_sec ≤ source duration`) → 400 on violation, checked before anything is saved. A player cascade-deleted **while the clip is being saved** (renders take seconds; the pre-render existence check can't cover them, and the row can also lose the race between its own COMMIT and the audio file being moved into place) is also **400** (`player N was deleted while the clip was rendering`) — the render is discarded and the job stays `done` with its source, so the import can be saved again for a surviving slot. Only a lost race reports 400: any other constraint failure is a real fault and surfaces as 500. Field bounds (rejected with **422**): `volume_boost_db` −24…+24 (the editor UI caps at ±12); `fade_in_ms`/`fade_out_ms` 0…60000 (the editor UI caps at 5000); all float fields reject NaN/Infinity.
+- `POST /api/clips` `{ "job_id", "player_id", "type", "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` → clip (runs ffmpeg slice + fades + loudnorm → 192k MP3; sets active if first clip of that player+type). `player_id`/`type` must match the slot the job was imported for → **400** otherwise (`this import was started for player N's <type> clip, ...`). Same trim validation as PATCH (`0 ≤ trim_start_sec < trim_end_sec ≤ source duration`, with the 1 ms end tolerance described there) → 400 on violation, checked before anything is saved. A player cascade-deleted **while the clip is being saved** (renders take seconds; the pre-render existence check can't cover them, and the row can also lose the race between its own COMMIT and the audio file being moved into place) is also **400** (`player N was deleted while the clip was rendering`) — the render is discarded and the job stays `done` with its source, so the import can be saved again for a surviving slot. Only a lost race reports 400: any other constraint failure is a real fault and surfaces as 500. Field bounds (rejected with **422**): `volume_boost_db` −24…+24 (the editor UI caps at ±12); `fade_in_ms`/`fade_out_ms` 0…60000 (the editor UI caps at 5000); all float fields reject NaN/Infinity.
 - `GET /api/clips/{id}/edit_context` →
   `{ "clip": <clip object>, "source_audio_url": "/media/sources/abc.mp3", "duration_sec": 213.4, "peaks": [0.12, ...] }`
-  (re-opens a saved clip in the trim editor; `duration_sec`/`peaks` describe the FULL source audio, like the job response).
+  (re-opens a saved clip in the trim editor; `duration_sec`/`peaks` describe the FULL source audio, like the job response). `duration_sec` here and on the job is the source length rounded **down** to the millisecond — never above the exact probed length — so a client that drags the trim handle to the very end and sends this number back as `trim_end_sec` is always accepted.
   404 if clip missing; **409** if the clip has no stored source file (saved before re-edit support) or the source file no longer exists on disk.
 - `PATCH /api/clips/{id}` `{ "trim_start_sec", "trim_end_sec", "fade_in_ms", "fade_out_ms", "volume_boost_db" }` (all required) → updated clip
   (re-renders from the clip's stored source with the same ffmpeg slice + fades + loudnorm → 192k MP3 pipeline; overwrites the clip's audio file via temp-file-then-move so a failed render never leaves a half-written mp3; updates `duration_sec`).
-  Validation: `0 ≤ trim_start_sec < trim_end_sec ≤ source duration` → 400 on violation; `volume_boost_db` −24…+24, `fade_in_ms`/`fade_out_ms` 0…60000, and no NaN/Infinity → **422** on violation; 404 if clip missing; 409 on missing source (same as edit_context). Note: a clip saved before these bounds existed with `|volume_boost_db| > 24` can no longer be PATCHed until the boost is brought into range (the editor UI already caps at ±12, so only hand-crafted requests hit this).
+  Validation: `0 ≤ trim_start_sec < trim_end_sec ≤ source duration` → 400 on violation (`trim_end_sec exceeds source duration (X.XXXs)`). A `trim_end_sec` up to **1 ms above** the exact source duration is accepted as "to the end": it is clamped to the source length for the render and stored clamped (so the returned `trim_end_sec` may be a hair below what was sent). This exists because the exact probed length is rarely a whole millisecond and the editor only ever sees it to the millisecond; anything further past the end is still a 400; `volume_boost_db` −24…+24, `fade_in_ms`/`fade_out_ms` 0…60000, and no NaN/Infinity → **422** on violation; 404 if clip missing; 409 on missing source (same as edit_context). Note: a clip saved before these bounds existed with `|volume_boost_db| > 24` can no longer be PATCHed until the boost is brought into range (the editor UI already caps at ±12, so only hand-crafted requests hit this).
 - `POST /api/clips/{id}/activate` → clip (clears is_active on sibling clips of same player+type)
 - `DELETE /api/clips/{id}` → 204 (removes the row + its mp3, and the trim source when nothing else references it). Deleting the **active** clip of a slot promotes the earliest remaining clip of that player+type to active in the same transaction, so a slot that still has clips never ends up with none active (deleting the last clip of a slot leaves it empty, as before)
 
 ## Hype clips
 
-Crowd stingers ("Charge!", "Take Me Out to the Ballgame") **not tied to any player** — played from the kiosk's H mode. Same import-job/render pipeline as player clips, but keyed by a `title` (1–80 chars, required) instead of player_id/type. Rendered audio lives at `DATA_DIR/hype/<id>.mp3` → `/media/hype/<id>.mp3`.
+Crowd stingers ("Charge!", "Take Me Out to the Ballgame") **not tied to any player** — played from the kiosk's H mode. Same import-job/render pipeline as player clips, but keyed by a `title` (1–80 chars, required) instead of player_id/type. Rendered audio lives at `DATA_DIR/hype/<id>.mp3` → `/media/hype/<id>.mp3`, exposed as `audio_url` with the same cache-busting `?v=` query as player clips (see Clips — use it verbatim).
 
 Hype clip object:
 ```json
 { "id", "title": "Charge!", "source": "youtube"|"upload", "source_url": "...",
-  "audio_url": "/media/hype/1.mp3",
+  "audio_url": "/media/hype/1.mp3?v=1789771569610450423",
   "duration_sec": 6.0, "trim_start_sec": 0.0, "trim_end_sec": 6.0,
   "fade_in_ms": 300, "fade_out_ms": 500, "volume_boost_db": 0.0, "created_at": "iso" }
 ```
@@ -133,7 +137,7 @@ Hype clip object:
 - `POST /api/playback/stop` (body optional: `{ "play_id"? }`) → state (halt ≤200ms). Without a body (STOP button, GPIO): always stops. With `play_id` (the browser `ended` reporter, used only when `server_eos` was false): stops only if that play is still current and server-owned completion is false — otherwise a no-op returning current state.
 - `POST /api/playback/volume` `{ "volume": 0-100 }` → state (persisted to settings)
 - `POST /api/playback/next` → state (next player in active team's batting order — wraps around — with an active walkup clip; plays it)
-- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "play_id", "volume", "audio_warning": null|"...", "audio_url", "volume_boost_db", "duration_sec", "elapsed_sec", "server_eos" }` (`type` is a clip type or `"hype"`). The last five are null while idle; while playing they describe the clip well enough for a client to **join it in progress** — `elapsed_sec` is how far in the play is, measured server-side from the play broadcast, and `server_eos` says whether the server owns completion (a client joining a `server_eos: false` play must report `ended`, as on the WS `play` event).
+- `GET /api/playback/state` → `{ "status": "idle"|"playing", "clip_id", "player_id", "type", "play_id", "volume", "audio_warning": null|"...", "audio_url", "volume_boost_db", "duration_sec", "elapsed_sec", "server_eos" }` (`type` is a clip type or `"hype"`; `audio_url` is the playing clip's `audio_url` verbatim, `?v=` included). The last five are null while idle; while playing they describe the clip well enough for a client to **join it in progress** — `elapsed_sec` is how far in the play is, measured server-side from the play broadcast, and `server_eos` says whether the server owns completion (a client joining a `server_eos: false` play must report `ended`, as on the WS `play` event).
 
 ## Bluetooth speaker pairing
 

@@ -99,9 +99,38 @@ function setAudioPlayer(v) {
     // Deliberately NOT reporting a stop: muting this device must never end
     // the clip for the other listeners. The server ends the play on time.
   } else if (!was) {
+    primeAudio();
     joinCurrentPlay();
   }
   emit('audiorole', { player: isPlayer });
+}
+
+/**
+ * Silent 1 ms WAV (44-byte header + 8 zero samples). The speaker toggle's
+ * click is the only user gesture a phone ever gives this page, so the
+ * audio element must be started INSIDE it: Chromium's autoplay policy
+ * rejects every later `play()` on a page that never played from a gesture,
+ * and iOS Safari is stricter still — the ELEMENT itself must have played
+ * once within a gesture. A phone opened as `?player=1` therefore sat silent
+ * with `audio.play() rejected` in a console nobody reads.
+ */
+const SILENT_WAV = 'data:audio/wav;base64,UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YRAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+/**
+ * Unlock the element while the gesture is still current. Runs synchronously
+ * from the toggle's click handler, before joinCurrentPlay's fetch. The
+ * generation bump retires any startAudio callbacks still in flight for the
+ * old role; the real play that follows bumps it again and replaces `src`,
+ * so the `src` checks keep this from pausing — or ending — a real clip.
+ */
+function primeAudio() {
+  playbackGeneration++;
+  activePlayId = null;
+  audio.src = SILENT_WAV;
+  if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
+  audio.play()
+    .then(() => { if (audio.src === SILENT_WAV) audio.pause(); })
+    .catch(() => { /* still blocked: startAudio reports it via the banner */ });
 }
 
 // Opting in mid-song: pick up the clip already in progress at the offset the
@@ -138,6 +167,7 @@ let lastServerEos = false;
 // still report — play_id keeps that conditional server-side, so a late
 // report from the PREVIOUS clip can't stop the one playing now.
 audio.addEventListener('ended', () => {
+  if (audio.src === SILENT_WAV) return; // the unlock blip, not a clip
   if (lastServerEos) return;
   playback.stop(lastPlayId).catch(() => {});
 });
@@ -192,7 +222,15 @@ function startAudio({ playId = null, audioUrl, volume, boostDb, offset = 0 }) {
   );
   const start = () => {
     if (!isCurrent()) return;
-    audio.play().catch((e) => console.warn('audio.play() rejected', e));
+    audio.play().catch((e) => {
+      console.warn('audio.play() rejected', e);
+      // Autoplay blocked: the device opted in (?player=1 or the toggle) but
+      // the browser wants a tap first. Say so on screen — the console
+      // warning alone left a player-role phone silently mute all game.
+      if (e && e.name === 'NotAllowedError') {
+        emit('warning', { message: 'Tap the \u{1F50A} button to enable sound on this device' });
+      }
+    });
   };
   if (offset > 0) {
     // Seek before starting — seeking after play() is audible as a blip, and

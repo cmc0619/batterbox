@@ -640,6 +640,23 @@ def reorder_players(team_id: int, player_ids: list[int]) -> None:
 # ------------------------------------------------------------------- clips
 
 
+def _media_url(subdir: str, item_id: int) -> str:
+    """URL of a rendered <subdir>/<id>.mp3 with a `?v=` that changes when the file does."""
+    # PATCH re-renders IN PLACE under a fixed name, and Chromium's media cache
+    # reuses an already-loaded resource for the same URL even after
+    # `audio.load()` — `Cache-Control: no-cache` can't help because no request
+    # is made at all (kiosk played the pre-trim render 6/6 times). The file's
+    # mtime is the version: one stat per row, and a missing file (row inserted
+    # before its render landed) gets the plain URL rather than an error out of
+    # a list endpoint.
+    url = f"/media/{subdir}/{item_id}.mp3"
+    try:
+        mtime_ns = os.stat(os.path.join(config.DATA_DIR, subdir, f"{item_id}.mp3")).st_mtime_ns
+    except OSError:
+        return url
+    return f"{url}?v={mtime_ns}"
+
+
 def _clip_to_dict(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -648,7 +665,7 @@ def _clip_to_dict(row: sqlite3.Row) -> dict:
         "is_active": bool(row["is_active"]),
         "source": row["source"],
         "source_url": row["source_url"],
-        "audio_url": f"/media/clips/{row['id']}.mp3",
+        "audio_url": _media_url("clips", row["id"]),
         "duration_sec": row["duration_sec"],
         "trim_start_sec": row["trim_start_sec"],
         "trim_end_sec": row["trim_end_sec"],
@@ -935,7 +952,7 @@ def _hype_to_dict(row: sqlite3.Row) -> dict:
         "title": row["title"],
         "source": row["source"],
         "source_url": row["source_url"],
-        "audio_url": f"/media/hype/{row['id']}.mp3",
+        "audio_url": _media_url("hype", row["id"]),
         "duration_sec": row["duration_sec"],
         "trim_start_sec": row["trim_start_sec"],
         "trim_end_sec": row["trim_end_sec"],

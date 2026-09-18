@@ -40,6 +40,17 @@
     </div>
   </section>
 
+  <section class="section" id="playback-section">
+    <h2>Playback</h2>
+    <div class="form-row volume-row">
+      <label for="vol-value">Volume:</label>
+      <button type="button" id="btn-vol-down" aria-label="Volume down 5">&minus;</button>
+      <span id="vol-value" aria-live="polite">&hellip;</span>
+      <button type="button" id="btn-vol-up" aria-label="Volume up 5">+</button>
+    </div>
+    <p class="wifi-hint">Master volume for every clip, on every speaker. Same setting as the Pi's physical volume buttons.</p>
+  </section>
+
   <section class="section" id="wifi-section">
     <h2>Wi-Fi Hotspot</h2>
     <p id="wifi-status" class="wifi-status">Wi-Fi status: loading…</p>
