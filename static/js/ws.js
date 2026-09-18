@@ -129,9 +129,25 @@ function primeAudio() {
   audio.src = SILENT_WAV;
   if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
   audio.play()
-    .then(() => { if (audio.src === SILENT_WAV) audio.pause(); })
+    .then(() => { audioUnlocked = true; if (audio.src === SILENT_WAV) audio.pause(); })
     .catch(() => { /* still blocked: startAudio reports it via the banner */ });
 }
+
+/** True once the element has played, so a gesture is no longer needed to start it. */
+let audioUnlocked = false;
+
+/**
+ * A page that STARTS in the player role (`?player=1`, or the stored toggle)
+ * never goes through the speaker button, so nothing primed the element and
+ * the first WS play was rejected — and the banner's advice to tap the
+ * speaker would have turned the role OFF. Any first tap on the page is a
+ * gesture: use it to unlock, then rejoin whatever is playing right now.
+ */
+document.addEventListener('pointerdown', () => {
+  if (!isPlayer || audioUnlocked) return;
+  primeAudio();
+  joinCurrentPlay();
+}, { capture: true });
 
 // Opting in mid-song: pick up the clip already in progress at the offset the
 // server reports, instead of standing there silent until the next batter.
@@ -206,13 +222,11 @@ function startAudio({ playId = null, audioUrl, volume, boostDb, offset = 0 }) {
   }
   activePlayId = playId;
   audio.src = audioUrl;
-  // A re-render (PATCH /api/clips|hype) rewrites the file under the SAME
-  // URL, and Chromium does not re-run the media load when `src` is assigned
-  // a string equal to the one it already holds — the kiosk kept playing the
-  // old bytes (old length, old trim) until the page was reloaded, while the
-  // server's EOS timer ran on the new duration. load() forces a fresh fetch;
-  // the server sends Cache-Control: no-cache on /media, so an unchanged clip
-  // costs one small conditional request per play on the LAN.
+  // A re-render (PATCH /api/clips|hype) rewrites the file in place; the
+  // server's `?v=` on audio_url is what guarantees a fresh fetch (Chromium's
+  // media cache reused the loaded resource by URL even after load() — 0/6
+  // refetches). load() stays as belt and braces: it restarts the element
+  // cleanly when the URL is unchanged, e.g. replaying the same clip.
   audio.load();
   const isCurrent = () => (
     generation === playbackGeneration
@@ -222,13 +236,13 @@ function startAudio({ playId = null, audioUrl, volume, boostDb, offset = 0 }) {
   );
   const start = () => {
     if (!isCurrent()) return;
-    audio.play().catch((e) => {
+    audio.play().then(() => { audioUnlocked = true; }).catch((e) => {
       console.warn('audio.play() rejected', e);
       // Autoplay blocked: the device opted in (?player=1 or the toggle) but
       // the browser wants a tap first. Say so on screen — the console
       // warning alone left a player-role phone silently mute all game.
       if (e && e.name === 'NotAllowedError') {
-        emit('warning', { message: 'Tap the \u{1F50A} button to enable sound on this device' });
+        emit('warning', { message: 'Tap anywhere to enable sound on this device' });
       }
     });
   };
