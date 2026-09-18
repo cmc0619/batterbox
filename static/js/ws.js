@@ -126,6 +126,11 @@ const SILENT_WAV = 'data:audio/wav;base64,UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAI
 function primeAudio() {
   playbackGeneration++;
   activePlayId = null;
+  // Build the boost graph NOW, inside the gesture: joinCurrentPlay awaits a
+  // fetch before startAudio would create it, and an AudioContext created
+  // after the gesture stays suspended on gesture-gated browsers — every
+  // boosted clip routed through it would then be silent.
+  ensureBoostGraph();
   audio.src = SILENT_WAV;
   if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
   audio.play()
