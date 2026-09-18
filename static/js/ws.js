@@ -189,6 +189,11 @@ let lastServerEos = false;
 // report from the PREVIOUS clip can't stop the one playing now.
 audio.addEventListener('ended', () => {
   if (audio.src === SILENT_WAV) return; // the unlock blip, not a clip
+  // A queued `ended` from the PREVIOUS source can run after startAudio has
+  // already swapped in the next clip and updated lastPlayId — it would then
+  // report the NEW play's id and stop it. The element's own flag settles it:
+  // once the source is replaced, `ended` reads false again.
+  if (!audio.ended) return;
   if (lastServerEos) return;
   playback.stop(lastPlayId).catch(() => {});
 });
