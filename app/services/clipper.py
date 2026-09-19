@@ -11,6 +11,7 @@ import functools
 import glob
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -508,7 +509,7 @@ def _analyze(job: dict, path: str) -> None:
                 f"{MAX_SOURCE_DURATION_SEC // 60} min"
             )
             return
-        job["duration_sec"] = round(duration, 3)
+        job["duration_sec"] = _report_duration(duration)
         samples = _decode_pcm(path)
         job["peaks"] = _peaks(samples)
         start = _loudest_window(samples, snippet)
@@ -525,6 +526,15 @@ def _analyze(job: dict, path: str) -> None:
         job["status"] = "error"
         job["detail"] = str(e)
         log.warning("analysis failed for job %s: %s", job["job_id"], e)
+
+
+def _report_duration(duration: float) -> float:
+    """Source duration as reported to the editor (job / edit_context), rounded DOWN to the ms."""
+    # `round()` can land above the exact ffprobe float, and the editor hands
+    # the number straight back as `trim_end_sec` when the user drags to the
+    # end — which then 400'd as "exceeds source duration (2.038s)" while
+    # printing the very number we gave it. Never report more than exists.
+    return math.floor(duration * 1000) / 1000
 
 
 def _peaks(samples: array) -> list[float]:
@@ -641,7 +651,7 @@ def _edit_context(source_file: str | None, key: str, obj: dict | None) -> dict:
     return {
         key: obj,
         "source_audio_url": "/media/sources/" + os.path.basename(path),
-        "duration_sec": round(duration, 3),
+        "duration_sec": _report_duration(duration),
         "peaks": peaks,
     }
 
@@ -664,26 +674,41 @@ def _probe_source(src: str) -> float:
         ) from None
 
 
+# How far past the exact source duration a `trim_end_sec` may land and still
+# mean "to the end". The editor only ever sees the duration to the ms, and a
+# source's true length rarely IS a whole ms, so "end" as the client knows it
+# can sit a fraction of a ms past the float ffprobe reports.
+TRIM_END_SLACK_SEC = 0.001
+
+
 def _validate_trim(
     src_duration: float,
     trim_start_sec: float,
     trim_end_sec: float,
     fade_in_ms: int,
     fade_out_ms: int,
-) -> float:
-    """Validate a trim against the source duration; returns the trimmed
-    duration. Raises JobError (client's fault → 400)."""
+) -> tuple[float, float]:
+    """Validate a trim; returns (trimmed duration, end to render/store). JobError → 400."""
+    # The returned end is `trim_end_sec` clamped to the source when it
+    # overshoots by at most TRIM_END_SLACK_SEC, so ffmpeg's `-to` never
+    # exceeds the source.
     if trim_start_sec < 0:
         raise JobError("trim_start_sec must be >= 0")
     if trim_end_sec <= trim_start_sec:
         raise JobError("trim_end_sec must be greater than trim_start_sec")
     if fade_in_ms < 0 or fade_out_ms < 0:
         raise JobError("fade_in_ms and fade_out_ms must be >= 0")
-    if trim_end_sec > src_duration:
+    if trim_end_sec > src_duration + TRIM_END_SLACK_SEC:
         raise JobError(
             f"trim_end_sec exceeds source duration ({src_duration:.3f}s)"
         )
-    return round(trim_end_sec - trim_start_sec, 3)
+    trim_end_sec = min(trim_end_sec, src_duration)
+    if trim_end_sec <= trim_start_sec:
+        # A start inside the slack window (10.0005 on a 10.0s source) passed
+        # the ordering check above but the clamp just emptied the interval;
+        # ffmpeg would fail on it -> 500 instead of the documented 400.
+        raise JobError("trim_end_sec must be greater than trim_start_sec")
+    return round(trim_end_sec - trim_start_sec, 3), trim_end_sec
 
 
 def _discard_render(dst_dir: str, item_id: int) -> None:
@@ -730,15 +755,16 @@ def _render_to_file(
     fade_in_ms: int,
     fade_out_ms: int,
     src_duration: float | None = None,
-) -> float:
-    """Validate the trim against the source duration, then render to
-    DATA_DIR/<dst_dir>/<item_id>.mp3 via temp-file-then-move so a failed render
-    never leaves a half-written mp3. Returns the rendered duration.
-    Pass `src_duration` if the caller already probed the source (one ffprobe
-    per request, not two)."""
+) -> tuple[float, float]:
+    """Validate the trim, then render DATA_DIR/<dst_dir>/<item_id>.mp3; returns (duration, end)."""
+    # Temp-file-then-move so a failed render never leaves a half-written mp3.
+    # The returned end is the (possibly clamped, see _validate_trim) end that
+    # was rendered — store that one, not the request's. Pass `src_duration`
+    # if the caller already probed the source (one ffprobe per request, not
+    # two).
     if src_duration is None:
         src_duration = _probe_source(src)
-    duration = _validate_trim(
+    duration, trim_end_sec = _validate_trim(
         src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
     )
     dst = os.path.join(config.DATA_DIR, dst_dir, f"{item_id}.mp3")
@@ -754,7 +780,7 @@ def _render_to_file(
         if os.path.exists(tmp):
             os.remove(tmp)
         raise
-    return duration
+    return duration, trim_end_sec
 
 
 def rerender_clip(
@@ -775,7 +801,7 @@ def rerender_clip(
             return None  # deleted before we acquired the lock
         try:
             src = _source_path(db.get_clip_source_file(clip_id))
-            duration = _render_to_file(
+            duration, trim_end_sec = _render_to_file(
                 src, "clips", clip_id, trim_start_sec, trim_end_sec,
                 fade_in_ms, fade_out_ms,
             )
@@ -816,7 +842,7 @@ def rerender_hype(
             return None  # deleted before we acquired the lock
         try:
             src = _source_path(db.get_hype_source_file(hype_id))
-            duration = _render_to_file(
+            duration, trim_end_sec = _render_to_file(
                 src, "hype", hype_id, trim_start_sec, trim_end_sec,
                 fade_in_ms, fade_out_ms,
             )
@@ -903,7 +929,7 @@ def create_clip(
         # Same validation as PATCH (incl. trim vs source duration) — fail fast
         # with a clean 400 before touching the DB, not a 500 out of ffmpeg.
         src_duration = _probe_source(src)
-        duration = _validate_trim(
+        duration, trim_end_sec = _validate_trim(
             src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
         )
         # Render BEFORE inserting the row: renders take seconds, and a row that
@@ -985,7 +1011,7 @@ def create_hype(
     db.mark_source_in_use(src_name)
     try:
         src_duration = _probe_source(src)
-        duration = _validate_trim(
+        duration, trim_end_sec = _validate_trim(
             src_duration, trim_start_sec, trim_end_sec, fade_in_ms, fade_out_ms
         )
         tmp = _render_to_temp(

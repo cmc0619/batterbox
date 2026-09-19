@@ -753,6 +753,38 @@ document.getElementById('btn-wifi-client').addEventListener('click', async () =>
 });
 setInterval(refreshWifi, 10000);
 
+/* ---------------- Playback: master volume ---------------- */
+
+const volValueEl = document.getElementById('vol-value');
+const volDownBtn = document.getElementById('btn-vol-down');
+const volUpBtn = document.getElementById('btn-vol-up');
+const VOL_STEP = 5;
+
+/**
+ * The displayed value is whatever the server last said (initial WS `state`,
+ * then `volume` events and the state each POST returns) — never a local
+ * counter, so a GPIO press on the Pi or a second phone's tap shows up here
+ * too. The buttons stop at the bounds so a coach can't hammer "+" at 100
+ * and wonder why nothing changes; the server clamps regardless.
+ */
+function renderVolume(v) {
+  if (v == null || Number.isNaN(Number(v))) return;
+  const vol = Math.max(0, Math.min(100, Number(v)));
+  volValueEl.textContent = String(vol);
+  volDownBtn.disabled = vol <= 0;
+  volUpBtn.disabled = vol >= 100;
+}
+async function nudgeVolume(delta) {
+  try {
+    const s = await BB.playback.changeVolume(delta);
+    if (s && s.volume != null) renderVolume(s.volume);
+  } catch (err) { showBanner(err.message, false); }
+}
+volDownBtn.addEventListener('click', () => nudgeVolume(-VOL_STEP));
+volUpBtn.addEventListener('click', () => nudgeVolume(VOL_STEP));
+BB.on('state', (msg) => renderVolume(msg.volume));
+BB.on('volume', (msg) => renderVolume(msg.volume));
+
 /* ---------------- WebSocket (volume sync for mock GPIO) ---------------- */
 
 BB.on('warning', (msg) => showBanner(msg.message, false));

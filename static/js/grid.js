@@ -194,6 +194,25 @@ function buildHypeEl(hype, kind) {
   return el;
 }
 
+/**
+ * Why the list is empty, per mode — or null when nothing should be shown.
+ * D and H start out empty on a fresh install (the seed ships no walkouts or
+ * hype), and 15 invisible filler tiles read as "the kiosk broke", not "add
+ * some". O mode's empty roster is already covered by the sticky "No teams
+ * yet" load banner, so it stays out of the grid.
+ */
+function emptyMessage() {
+  if (mode === 'd') return 'No walkout clips yet \u2014 add them in ADMIN';
+  if (mode === 'h') return 'No hype clips yet \u2014 add them in ADMIN';
+  return null;
+}
+function emptyMessageEl(msg) {
+  const d = document.createElement('div');
+  d.className = 'grid-empty';
+  d.textContent = msg;
+  return d;
+}
+
 function render() {
   const hypeMode = mode === 'h';
   const list = hypeMode ? hypeClips : visiblePlayers();
@@ -205,16 +224,22 @@ function render() {
   for (const item of slice) {
     gridEl.appendChild(hypeMode ? buildHypeEl(item, 'tile') : buildPlayerEl(item, 'tile'));
   }
-  for (let i = slice.length; i < PAGE_SIZE; i++) {
-    const filler = document.createElement('div');
-    filler.className = 'tile empty';
-    gridEl.appendChild(filler);
+  const emptyMsg = list.length === 0 ? emptyMessage() : null;
+  if (emptyMsg) {
+    gridEl.appendChild(emptyMessageEl(emptyMsg));
+  } else {
+    for (let i = slice.length; i < PAGE_SIZE; i++) {
+      const filler = document.createElement('div');
+      filler.className = 'tile empty';
+      gridEl.appendChild(filler);
+    }
   }
 
   phoneListEl.textContent = '';
   for (const item of list) {
     phoneListEl.appendChild(hypeMode ? buildHypeEl(item, 'prow') : buildPlayerEl(item, 'prow'));
   }
+  if (emptyMsg) phoneListEl.appendChild(emptyMessageEl(emptyMsg));
 
   const paged = list.length > PAGE_SIZE;
   pagePrev.hidden = !paged;

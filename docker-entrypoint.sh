@@ -29,8 +29,16 @@ fi
 # fail loudly in `docker logs` instead of silently falling back to mock mode.
 # We do not exit: kiosk/audio still work, and a dead container at the field is
 # worse than a visible error.
+# gpiozero 2.x creates the pin factory LAZILY (on the first Device), so reading
+# `Device.pin_factory` in a fresh interpreter is always None — this probe
+# reported "buttons DEAD" on every Pi boot even when lgpio was fine. Force the
+# factory to resolve here instead (`ensure_pin_factory` sets Device.pin_factory;
+# older gpiozero only has `_default_pin_factory`). The probe is its own
+# process, so the app's GPIO setup is untouched. Any failure to build one
+# (gpiozero missing, BadPinFactory, no /dev/gpiochip0, …) exits non-zero and
+# reports None, which trips the same ERROR lines below.
 if [ "${MOCK_GPIO:-true}" = "false" ]; then
-    FACTORY=$(python -c "import gpiozero; f=gpiozero.Device.pin_factory; print(type(f).__name__ if f else 'None')" 2>/dev/null || echo 'import-error')
+    FACTORY=$(python -c "import gpiozero; D=gpiozero.Device; D.ensure_pin_factory() if hasattr(D, 'ensure_pin_factory') else setattr(D, 'pin_factory', D._default_pin_factory()); f=D.pin_factory; print(type(f).__name__ if f else 'None')" 2>/dev/null || echo 'None')
     echo "[gpio] pin factory: ${FACTORY}"
     if [ "${FACTORY}" != "LGPIOFactory" ]; then
         echo "[gpio] ERROR: expected LGPIOFactory on a Pi 4 — physical buttons are DEAD." >&2
