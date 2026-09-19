@@ -44,6 +44,32 @@ Automated reviewers keep filing these as defects. They are deliberate choices fo
 a private-LAN appliance (one Pi 4, one field, no internet). If a review raises
 one, answer with this section instead of "fixing" it.
 
+**The operating model, so nobody has to guess (owner directive, 2026-09-19):**
+one Pi, one operator, one field. The roster and songs are loaded on the couch
+before the season. At the game, someone mashes a button and the song goes. The
+only edits at the field are a no-show, a jersey swap, or a wrong song, made by
+one person between innings. That is the whole product. It is a toy for a kids'
+baseball team, not an Oracle KPI program, and any proposal that quietly assumes
+otherwise (concurrent editors, multi-tenant, audit trails, dashboards, roles,
+observability, "at scale") will be laughed out of the review. If a finding is
+only reachable outside this model, it is not a defect. Say so and move on.
+
+Closed under that model on 2026-09-19, do not reopen:
+
+- **`AUDIO_BACKEND=server` + a kiosk with `?player=1` double-plays** (mpv and
+  Chromium). `docker-compose.pi.yml` already says `server` is for headless,
+  phones-only operation with no browser on the Pi. Running both is a
+  misconfiguration the file warns against, and silencing browser players when
+  mpv is active would also silence a spectator's phone.
+- **A `job_id` can be saved twice** (second clip lands inactive). Only reachable
+  by replaying the request by hand; the editor disables SAVE while saving and
+  reloads clean after a back-forward-cache restore. Reuse is what makes
+  delete-then-re-save work. Do not make jobs single-use.
+- **`admin.html` does not refetch on `data_changed`** (the kiosk does). It only
+  matters with two people editing the roster at once, which does not happen.
+- **yt-dlp pin drift.** Bump it when an import breaks (see Lessons learned).
+  No bot, no scheduler, no update button.
+
 - **No authentication or authorization anywhere**, and permissive CORS
   (`allow_origins=["*"]`). Anyone who can reach the app is standing at the field.
 - **Wi-Fi hotspot password stored and returned in plain text** — the admin page
